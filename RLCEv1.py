@@ -2,12 +2,12 @@ import numpy as np
 import galois
 
 # Define field GF(2^m)
-m = 8  # Can be 4, 8, or 10 for larger examples
+m = 4  # Can be 4, 8, or 10 for larger examples
 GF = galois.GF(2**m)
 
 # Set GRS parameters
-n = 255   # Code length (number of columns)
-k = 128    # Code dimension (number of rows), k < n
+n = 10   # Code length (number of columns)
+k = 6    # Code dimension (number of rows), k < n
 
 # Choose n distinct elements from the field (evaluation points)
 x = GF.Random(n)
@@ -206,76 +206,3 @@ print("Message m:", m)
 print("Error vector e:", e)
 print("Ciphertext c:", c)
 
-def rlce_decrypt(GF, c, S, A, P2, Gs, t):
-    """
-    Decrypt an RLCE ciphertext using the private key components.
-
-    Parameters:
-    - GF: Galois field
-    - c: Ciphertext vector (length n+w)
-    - S: Random invertible matrix (k x k)
-    - A: Block-diagonal matrix (n+w x n+w)
-    - P2: Permutation vector (length n+w)
-    - Gs: Original GRS generator matrix (k x n)
-    - t: Max number of correctable errors
-
-    Returns:
-    - m_recovered: The recovered message (in GF)
-    - e_recovered: The recovered error vector (in GF)
-    """
-
-    # Step 1: Undo P2 permutation
-    P2_inv = np.argsort(P2)
-    c_unpermuted = c[P2_inv]
-
-    # Step 2: Undo A transformation
-    A_inv = np.linalg.inv(A)
-    c_A_reversed = c_unpermuted @ A_inv
-
-    # Step 3: Trim G1-inserted columns (remove w random columns)
-    # Assume original Gs had shape (k, n), so we remove w columns
-    n = Gs.shape[1]
-    n_w = c.shape[0]
-    w = n_w - n
-
-    # Identify indices of inserted columns (by comparing G1 to Gs shape)
-    # For a real implementation, these indices must be stored or deduced
-    # For simplicity here, we assume the inserted columns were at known indices
-    # If you stored insert_positions during keygen, you should reuse them
-    # For now, assume inserted positions were evenly spaced in the last `w` columns
-    original_indices = np.sort(np.setdiff1d(np.arange(n_w), np.arange(n_w - w, n_w)))
-
-    # Step 4: Extract part corresponding to Gs
-    c_trimmed = c_A_reversed[original_indices]
-
-    # Step 5: Decode GRS code (c_trimmed = m @ Gs + e_partial)
-    try:
-        # Use galois Reed-Solomon decoder
-        RS = galois.ReedSolomon(Gs.shape[1], Gs.shape[0], field=GF)
-        m_decoded = RS.decode(c_trimmed)
-    except Exception as e:
-        print("❌ GRS decoding failed:", e)
-        return None, None
-
-    # Step 6: Undo S transformation
-    S_inv = np.linalg.inv(S)
-    m_recovered = m_decoded @ S_inv
-
-    # Step 7: Verify error vector
-    # Re-encode and compare to trimmed c
-    c_reconstructed = m_decoded @ Gs
-    e_recovered = c_trimmed - c_reconstructed
-    error_weight = np.count_nonzero(e_recovered)
-
-    if error_weight > t:
-        print(f"❌ Error weight {error_weight} exceeds threshold {t}")
-        return None, None
-
-    print("✅ Decryption successful.")
-    return m_recovered, e_recovered
-
-# Then decrypt:
-m_recovered, e_recovered = rlce_decrypt(GF, c, S, A, P2, Gs, t=2)
-
-print("Recovered Message:", m_recovered)
-print("Recovered Error Vector:", e_recovered)

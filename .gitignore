@@ -1,0 +1,13 @@
+# MacOS
+.DS_Store
+
+# Environment variables
+*.env
+
+# JetBrains
+.idea/
+
+# Visual Studio Code
+.vscode/
+
+/yonggewang:RLCE

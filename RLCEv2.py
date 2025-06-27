@@ -3,6 +3,7 @@ import numpy as np
 import galois
 import random
 from diffusers.pipelines.pia.pipeline_pia import RANGE_LIST
+from pygments.styles.gh_dark import GREEN_1
 
 m = 8
 q = 2 ** m
@@ -196,7 +197,7 @@ def keySetup(n, k, d, t, w):
     print("Public Key G:")
     printf(G, 'green')
 
-    return G, (S, G_s.view(np.ndarray), P_1, P_2, A)
+    return G, (S, G_s.view(np.ndarray), P_1, P_2, A), G_1
 
 
 def generate_error_vector(n, w, t, GF):
@@ -219,12 +220,15 @@ def generate_error_vector(n, w, t, GF):
 
     return e.view(np.ndarray)  # Convert to NumPy array
 
+
 def string_to_field_vector(s):
     byte_vals = [ord(c) for c in s]  # Convert characters to ASCII
     return GF(byte_vals)  # Convert to field elements
 
+
 def field_vector_to_string(v):
     return ''.join(chr(int(x)) for x in v)
+
 
 def prepare_message(s, k):
     m_vec = string_to_field_vector(s)
@@ -234,6 +238,7 @@ def prepare_message(s, k):
         pad = GF.Zeros(k - len(m_vec))
         m_vec = np.hstack((m_vec, pad))
     return m_vec.view(np.ndarray)  # Convert to NumPy array
+
 
 def enc(G, m, e):
     print("Error vector e:")
@@ -246,14 +251,46 @@ def enc(G, m, e):
 
     return c
 
+
+def dec(S, G_s, P_1, P_2, A, c, e, G_1):
+    c_prime = c @ np.linalg.inv(P_2) @ np.linalg.inv(A)
+    selected = list(c_prime[:n - w])
+
+    # For each 2x2 block, select the first element
+    for i in range(w):
+        block_start = n - w + 2 * i
+        selected.append(c_prime[block_start])
+
+    c_prime_prime = selected @ np.linalg.inv(P_1)
+
+    RS = galois.ReedSolomon(n, k, field=GF)
+    c_prime_prime_GF = GF(c_prime_prime.astype(int) % 256)
+    # Decode the received vector
+    decoded = RS.decode(c_prime_prime_GF)
+
+    print(decoded)
+
+    G_s_prime = G_s[:, :k].view(np.ndarray)  # Convert G_s to NumPy array
+    print(G_s_prime)
+    D = np.linalg.inv(S @ G_s_prime)
+    c_1 = decoded[:k]  # Extract the first k elements
+    m = c_1.view(np.ndarray) @ D
+    print(m)
+
+    m_prime = m[:k] % 255
+    print(m_prime)
+
+    return m_prime
+
+
 if __name__ == "__main__":
     t = 4
     d = 2*t + 1
     k = round(d/4)
-    n = d + k - 1
+    n = 15 # d + k - 1
     w = random.randint(1, n)  # Randomly choose w in the range [1, n]
 
-    publicKey, privateKey = keySetup(n, k, d, t, w)
+    publicKey, privateKey, G_1 = keySetup(n, k, d, t, w)
 
     print("Public Key:")
     printf(publicKey, 'blue')
@@ -267,3 +304,10 @@ if __name__ == "__main__":
 
     print("Ciphertext:")
     printf(c, 'green')
+
+    S, G_s, P_1, P_2, A = privateKey
+    m_dec = dec(S, G_s, P_1, P_2, A, c, e, G_1)
+    print("Decrypted message vector:")
+    printf(m_dec, 'red')
+    print("Decrypted message string:")
+    printf(field_vector_to_string(m_dec), 'red')

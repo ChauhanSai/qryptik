@@ -2,7 +2,7 @@ import numpy as np
 import galois
 from scipy.linalg import block_diag
 
-def KeyGen(n, k, t, r) -> tuple: #returns (public key, private key)
+def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, private key)
     #n = code length
     #k = message dimension
     #t = error correction capability
@@ -22,14 +22,12 @@ def KeyGen(n, k, t, r) -> tuple: #returns (public key, private key)
     
     return (public_key, private_key)
 
-def generate_rs_code(k, n) -> galois.FieldArray:
-    
-
+def generate_rs_code(k, n) -> galois.ReedSolomon:
     GF = galois.GF(n+1)
     rs_code = galois.ReedSolomon(n=n, k=k, field=GF)
     return rs_code
     
-def generate_G1(Gs, r, GF) -> np.ndarray:
+def generate_G1(Gs: galois.FieldArray, r: int, GF: type[galois.FieldArray]) -> galois.FieldArray:
     k = Gs.shape[0]
     n = Gs.shape[1]
     columns_to_stack = []
@@ -45,7 +43,7 @@ def generate_G1(Gs, r, GF) -> np.ndarray:
     G1 = np.hstack(columns_to_stack)
     return G1
 
-def generate_A(n, r, GF) -> np.ndarray:
+def generate_A(n: int, r: int, GF: type[galois.FieldArray]) -> galois.FieldArray:
     a = []
     for _ in range(n):
         a.append(generate_random_non_singular_matrix(r + 1, GF))
@@ -53,7 +51,7 @@ def generate_A(n, r, GF) -> np.ndarray:
     A = GF(block_diag(*a))
     return A
 
-def generate_random_non_singular_matrix(n, GF) -> np.ndarray:
+def generate_random_non_singular_matrix(n, GF) -> galois.FieldArray:
     while True:
         # Generate matrix directly in the specified Galois Field
         matrix = GF.Random((n, n))
@@ -68,7 +66,7 @@ def generate_random_permutation_matrix(n) -> np.ndarray:
     return permutation_matrix
 
 
-def encrypt(G, message: np.ndarray, weight: int) -> np.ndarray:
+def encrypt(G: galois.FieldArray, message: np.ndarray, weight: int) -> galois.FieldArray:
     GF = type(G) # Get the finite field from the generator matrix
     
     e = GF.Zeros(G.shape[1])
@@ -82,7 +80,7 @@ def encrypt(G, message: np.ndarray, weight: int) -> np.ndarray:
     
     return ciphertext
 
-def decrypt(private_key, ciphertext) -> np.ndarray: # returns message
+def decrypt(private_key: dict, ciphertext: galois.FieldArray) -> galois.FieldArray:
     #unpack private key
     S = private_key["S"]
     P = private_key["P"]

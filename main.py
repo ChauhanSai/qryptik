@@ -34,6 +34,31 @@ def gf_matrix_inverse(A: "galois.FieldArray") -> "galois.FieldArray":
                 Aug[r] = Aug[r] - factor * Aug[col]
     return Aug[:, n:]
 
+# ---------- ciphertext validity check ----------
+def validate_ciphertext(G, m, y, t):
+    """
+    Verify that a decrypted message m is consistent with ciphertext y.
+    This is done by checking if the residual error vector has Hamming weight <= t.
+    """
+    if m.ndim == 1:
+        m = m.reshape(1, -1)
+
+    # Compute the expected clean codeword c = mG using the public key generator matrix G.
+    # Then compute residual = y - c, which represents the error vector introduced during encryption.
+    resid = y - (m @ G)
+
+    # Count the number of nonzero entries in the residual vector.
+    # This is the Hamming weight of the error vector 
+    weight = int(np.count_nonzero(resid != 0))
+
+    # If the Hamming weight exceeds the error-correcting capability t,
+    # then the ciphertext is invalid (too many errors).
+    if weight > t:
+        raise ValueError("Ciphertext invalid (residual weight > t)")
+
+    # Otherwise, the ciphertext is consistent and valid.
+
+
 def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, private key)
     #n = code length
     #k = message dimension
@@ -50,7 +75,7 @@ def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, 
     P = GF(generate_random_permutation_matrix(n*(r+1))) #random permutation matrix
     
     public_key = S @ G1 @ A @ P
-    private_key = {"S":S, "P":P, "A":A, "rs_code":rs_code, "GF":GF, "n":n, "r":r}
+    private_key = {"S":S, "P":P, "A":A, "rs_code":rs_code, "GF":GF, "n":n, "r":r, "t":t, "G_pub":public_key}
     
     return (public_key, private_key)
 
@@ -126,6 +151,8 @@ def decrypt(private_key: dict, ciphertext: galois.FieldArray) -> galois.FieldArr
     rs_code = private_key["rs_code"]
     n = private_key["n"]
     r = private_key["r"]
+    t = private_key["t"]
+    G_pub = private_key["G_pub"]
     
     # Use Gauss–Jordan inverse instead of np.linalg.inv
     S_inv = gf_matrix_inverse(S)
@@ -143,6 +170,9 @@ def decrypt(private_key: dict, ciphertext: galois.FieldArray) -> galois.FieldArr
     
     # Unscramble with the inverse of S to recover the original message
     decrypted_message = decoded_message_scrambled @ S_inv
+    
+    # ---------- Call ciphertext validation ----------
+    validate_ciphertext(G_pub, decrypted_message, ciphertext, t)
     
     return decrypted_message
 
@@ -171,7 +201,7 @@ if __name__ == "__main__":
     # 5. Verify the result
     is_correct = np.array_equal(message_to_encrypt, decrypted_message)
     
-    print("\n--- McEliece Cryptosystem Verification ---")
-    print("Original Message: ", message_to_encrypt)
-    print("Decrypted Message:", decrypted_message)
-    print("Success:", is_correct, "✅" if is_correct else "❌")
+    print("\n McEliece Cryptosystem Verification  final demo.py:204 - main.py:204")
+    print("Original Message:  final demo.py:205 - main.py:205", message_to_encrypt)
+    print("Decrypted Message:  final demo.py:206 - main.py:206", decrypted_message)
+    print("Success:  final demo.py:207 - main.py:207", is_correct, "✅" if is_correct else "❌")

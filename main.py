@@ -2,6 +2,38 @@ import numpy as np
 import galois
 from scipy.linalg import block_diag
 
+# ---------- NEW: Gauss–Jordan inverse ----------
+def gf_matrix_inverse(A: "galois.FieldArray") -> "galois.FieldArray":
+    """
+    Invert a square matrix A over a galois FieldArray using Gauss–Jordan.
+    Safer than np.linalg.inv for finite fields because it avoids float det issues.
+    """
+    GF = type(A)
+    n = A.shape[0]
+    # Build augmented matrix [A | I]
+    Aug = np.concatenate([A.copy(), GF(np.eye(n, dtype=int))], axis=1)
+    for col in range(n):
+        # Find pivot
+        pivot = None
+        for r in range(col, n):
+            if Aug[r, col] != 0:
+                pivot = r
+                break
+        if pivot is None:
+            raise np.linalg.LinAlgError("Singular matrix in GF")
+        # Swap if needed
+        if pivot != col:
+            Aug[[col, pivot]] = Aug[[pivot, col]]
+        # Normalize pivot row
+        piv = Aug[col, col]
+        Aug[col] = Aug[col] / piv
+        # Eliminate other rows
+        for r in range(n):
+            if r != col:
+                factor = Aug[r, col]
+                Aug[r] = Aug[r] - factor * Aug[col]
+    return Aug[:, n:]
+
 def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, private key)
     #n = code length
     #k = message dimension
@@ -51,13 +83,19 @@ def generate_A(n: int, r: int, GF: type[galois.FieldArray]) -> galois.FieldArray
     A = GF(block_diag(*a))
     return A
 
+# ---------- MODIFIED: random invertible matrix ----------
 def generate_random_non_singular_matrix(n, GF) -> galois.FieldArray:
+    """
+    Generate a random invertible matrix over GF using Gauss–Jordan to test invertibility.
+    Replaces np.linalg.det which can misbehave in finite fields.
+    """
     while True:
-        # Generate matrix directly in the specified Galois Field
-        matrix = GF.Random((n, n))
-        # Use np.linalg.det, which is overloaded by the galois library
-        if np.linalg.det(matrix) != 0:
-            return matrix
+        M = GF.Random((n, n))
+        try:
+            _ = gf_matrix_inverse(M)  # Check invertibility
+            return M
+        except np.linalg.LinAlgError:
+            continue
         
 def generate_random_permutation_matrix(n) -> np.ndarray:
     permutation_indices = np.random.permutation(n)
@@ -89,10 +127,10 @@ def decrypt(private_key: dict, ciphertext: galois.FieldArray) -> galois.FieldArr
     n = private_key["n"]
     r = private_key["r"]
     
-    # Get the inverse matrices
-    S_inv = np.linalg.inv(S)
-    P_inv = np.linalg.inv(P)
-    A_inv = np.linalg.inv(A)
+    # Use Gauss–Jordan inverse instead of np.linalg.inv
+    S_inv = gf_matrix_inverse(S)
+    P_inv = gf_matrix_inverse(P)
+    A_inv = gf_matrix_inverse(A)
     
     intermediate_vector = ciphertext @ P_inv @ A_inv
     

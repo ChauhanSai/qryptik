@@ -1,6 +1,5 @@
 import numpy as np
 import galois
-from scipy.linalg import block_diag
 
 # ---------- NEW: Gauss–Jordan inverse ----------
 def gf_matrix_inverse(A: "galois.FieldArray") -> "galois.FieldArray":
@@ -101,12 +100,13 @@ def generate_G1(Gs: galois.FieldArray, r: int, GF: type[galois.FieldArray]) -> g
     return G1
 
 def generate_A(n: int, r: int, GF: type[galois.FieldArray]) -> galois.FieldArray:
-    a = []
-    for _ in range(n):
-        a.append(generate_random_non_singular_matrix(r + 1, GF))
-        
-    A = GF(block_diag(*a))
-    return A
+    blocks = [generate_random_non_singular_matrix(r + 1, GF) for _ in range(n)]
+    A = np.block([
+        [blocks[i] if i == j else GF.Zeros((r+1, r+1)) for j in range(n)]
+        for i in range(n)
+    ])
+
+    return GF(A)
 
 # ---------- MODIFIED: random invertible matrix ----------
 def generate_random_non_singular_matrix(n, GF) -> galois.FieldArray:

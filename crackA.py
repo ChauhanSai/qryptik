@@ -206,16 +206,85 @@ if __name__ == "__main__":
     print("Decrypted Message:  final demo.py:206 - main.py:206", decrypted_message)
     print("Success:  final demo.py:207 - main.py:207", is_correct, "✅" if is_correct else "❌")
 
+'''
+
+method to try and crack A within amalgamated code -->
 
 '''
- 
+
+def left_inverse(matrix: galois.FieldArray) -> galois.FieldArray:
+    """
+    Compute the left inverse (Moore-Penrose pseudo-inverse) of a matrix over GF.
+    Only works if matrix has full column rank.
+    """
+    GF = type(matrix)
+    gram = matrix.T @ matrix
+    gram_inv = gf_matrix_inverse(gram)
+    return gram_inv @ matrix.T
+
+def crack_A(public_key: galois.FieldArray, private_key: dict) -> galois.FieldArray:
+    """
+    Recover the block diagonal matrix A from the public key and private key components.
+    """
+    S = private_key["S"]
+    P = private_key["P"]
+    G1 = generate_G1(private_key["rs_code"].G, private_key["r"], private_key["GF"])
+    n = private_key["n"]
+    r = private_key["r"]
+    GF = private_key["GF"]
+
+    # Invert S and P
+    S_inv = gf_matrix_inverse(S)
+    P_inv = gf_matrix_inverse(P)
+
+    # Compute intermediate matrix M = S_inv * public_key * P_inv
+    M = S_inv @ public_key @ P_inv
+
+    block_size = r + 1
+    A_blocks = []
+
+    for i in range(n):
+        col_start = i * block_size
+        col_end = (i + 1) * block_size
+
+        G1_block = G1[:, col_start:col_end]  # k x (r+1)
+        M_block = M[:, col_start:col_end]    # k x (r+1)
+
+        # Compute left inverse of G1_block
+        try:
+            G1_block_left_inv = left_inverse(G1_block)
+        except np.linalg.LinAlgError:
+            raise ValueError(f"Cannot invert Gram matrix for block {i}. Rank deficiency.")
+
+        # Recover block A_i
+        A_i = G1_block_left_inv @ M_block
+        A_blocks.append(A_i)
+
+    # Assemble block diagonal matrix A from blocks
+    A_recovered = GF(np.block([
+        [A_blocks[i] if i == j else GF.Zeros((block_size, block_size)) for j in range(n)]
+        for i in range(n)
+    ]))
+
+    return A_recovered
 
 
-method to try and crack A within amalgamated code
-
-
+if __name__ == "__main__":
+    # ... existing code above ...
+    
+    # --- CRACK A TEST ---
+    print("\nAttempting to recover A from the public key...")
+    A_recovered = crack_A(public_key, private_key)
+    
+    # Check if recovered A matches original A
+    A_original = private_key["A"]
+    is_A_correct = np.array_equal(A_recovered, A_original)
+    print("Recovered A matches original A:", is_A_correct, "✅" if is_A_correct else "❌")
 
 '''
+IGNORE BELOW CODE (failed method)
+
+
 def crack_A(public_key: galois.FieldArray, S: galois.FieldArray, G1: galois.FieldArray, P: galois.FieldArray, n: int, r: int, GF: type[galois.FieldArray]) -> galois.FieldArray:
     """
     Given public_key = S @ G1 @ A @ P,
@@ -264,3 +333,5 @@ if __name__ == "__main__":
     match = np.array_equal(A, A_cracked)
     
     print("Original A and Cracked A match:", match, "✅" if match else "❌")
+
+'''

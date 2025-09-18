@@ -74,7 +74,7 @@ def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, 
     P = GF(generate_random_permutation_matrix(n*(r+1))) #random permutation matrix
     
     public_key = S @ G1 @ A @ P
-    private_key = {"S":S, "P":P, "A":A, "rs_code":rs_code, "GF":GF, "n":n, "r":r, "t":t, "G_pub":public_key}
+    private_key = {"S":S, "P":P, "A":A, "rs_code":rs_code, "GF":GF, "n":n, "r":r, "t":t, "G_pub":public_key, "G1":G1}
     
     return (public_key, private_key)
 
@@ -228,7 +228,8 @@ def crack_A(public_key: galois.FieldArray, private_key: dict) -> galois.FieldArr
     """
     S = private_key["S"]
     P = private_key["P"]
-    G1 = generate_G1(private_key["rs_code"].G, private_key["r"], private_key["GF"])
+    # G1 = generate_G1(private_key["rs_code"].G, private_key["r"], private_key["GF"])
+    G1 = private_key["G1"]
     n = private_key["n"]
     r = private_key["r"]
     GF = private_key["GF"]
@@ -275,9 +276,10 @@ if __name__ == "__main__":
     # --- CRACK A TEST ---
     print("\nAttempting to recover A from the public key...")
     A_recovered = crack_A(public_key, private_key)
-    
+    print("Recovered A:", A_recovered)
     # Check if recovered A matches original A
     A_original = private_key["A"]
+    print("OG A:", A_original)
     is_A_correct = np.array_equal(A_recovered, A_original)
     print("Recovered A matches original A:", is_A_correct, "✅" if is_A_correct else "❌")
 

@@ -1,8 +1,5 @@
 import numpy as np
 import galois
-<<<<<<< Updated upstream
-from scipy.linalg import block_diag
-=======
 
 # ---------- NEW: Gauss–Jordan inverse ----------
 def gf_matrix_inverse(A: "galois.FieldArray") -> "galois.FieldArray":
@@ -61,7 +58,6 @@ def validate_ciphertext(public_key: dict, m, y, t):
 
     # Otherwise, the ciphertext is consistent and valid.
 
->>>>>>> Stashed changes
 
 def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, private key)
     #n = code length
@@ -78,13 +74,8 @@ def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, 
     S = generate_random_non_singular_matrix(k, GF) #random non-singular matrix
     P = GF(generate_random_permutation_matrix(n*(r+1))) #random permutation matrix
     
-<<<<<<< Updated upstream
-    public_key = S @ G1 @ A @ P
-    private_key = {"S":S, "P":P, "A":A, "rs_code":rs_code, "GF":GF, "n":n, "r":r}
-=======
     public_key = {"G":(S @ G1 @ A @ P), "n":n, "r":r, "k":k}
     private_key = {"S":S, "P":P, "A":A, "rs_code":rs_code, "GF":GF, "n":n, "r":r, "t":t, "G_pub":public_key}
->>>>>>> Stashed changes
     
     return (public_key, private_key)
 
@@ -258,12 +249,6 @@ if __name__ == "__main__":
     print("Decrypted Message:", decrypted_message)
     print(f"Success: {is_correct} {'✅' if is_correct else '❌'}\n")
     
-<<<<<<< Updated upstream
-    print("\n--- McEliece Cryptosystem Verification ---")
-    print("Original Message: ", message_to_encrypt)
-    print("Decrypted Message:", decrypted_message)
-    print("Success:", is_correct, "✅" if is_correct else "❌")
-=======
     # 3. --- NEW: SIMULATE ATTACK ---
     print("--- ATTACK SIMULATION ---")
     print("Step 1: Cracking permutation P to find G_real...")
@@ -301,4 +286,3 @@ if __name__ == "__main__":
 
     except ValueError as e:
         print(f"\nAttack failed: {e} ❌")
->>>>>>> Stashed changes

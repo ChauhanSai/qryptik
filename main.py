@@ -1,6 +1,67 @@
 import numpy as np
 import galois
+<<<<<<< Updated upstream
 from scipy.linalg import block_diag
+=======
+
+# ---------- NEW: Gauss–Jordan inverse ----------
+def gf_matrix_inverse(A: "galois.FieldArray") -> "galois.FieldArray":
+    """
+    Invert a square matrix A over a galois FieldArray using Gauss–Jordan.
+    Safer than np.linalg.inv for finite fields because it avoids float det issues.
+    """
+    GF = type(A)
+    n = A.shape[0]
+    # Build augmented matrix [A | I]
+    Aug = np.concatenate([A.copy(), GF(np.eye(n, dtype=int))], axis=1)
+    for col in range(n):
+        # Find pivot
+        pivot = None
+        for r in range(col, n):
+            if Aug[r, col] != 0:
+                pivot = r
+                break
+        if pivot is None:
+            raise np.linalg.LinAlgError("Singular matrix in GF")
+        # Swap if needed
+        if pivot != col:
+            Aug[[col, pivot]] = Aug[[pivot, col]]
+        # Normalize pivot row
+        piv = Aug[col, col]
+        Aug[col] = Aug[col] / piv
+        # Eliminate other rows
+        for r in range(n):
+            if r != col:
+                factor = Aug[r, col]
+                Aug[r] = Aug[r] - factor * Aug[col]
+    return Aug[:, n:]
+
+# ---------- ciphertext validity check ----------
+def validate_ciphertext(public_key: dict, m, y, t):
+    """
+    Verify that a decrypted message m is consistent with ciphertext y.
+    This is done by checking if the residual error vector has Hamming weight <= t.
+    """
+    G=public_key["G"]
+    if m.ndim == 1:
+        m = m.reshape(1, -1)
+
+    # Compute the expected clean codeword c = mG using the public key generator matrix G.
+    # Then compute residual = y - c, which represents the error vector introduced during encryption.
+    resid = y - (m @ G)
+
+    # Count the number of nonzero entries in the residual vector.
+    # This is the Hamming weight of the error vector 
+    weight = int(np.count_nonzero(resid != 0))
+
+    # If the Hamming weight exceeds the error-correcting capability t,
+    # then the ciphertext is invalid (too many errors).
+    if weight > t:
+        raise ValueError("Ciphertext invalid (residual weight > t)")
+
+    # Otherwise, the ciphertext is consistent and valid.
+
+>>>>>>> Stashed changes
 
 def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, private key)
     #n = code length
@@ -17,8 +78,13 @@ def KeyGen(n, k, t, r) -> tuple[galois.FieldArray, dict]: #returns (public key, 
     S = generate_random_non_singular_matrix(k, GF) #random non-singular matrix
     P = GF(generate_random_permutation_matrix(n*(r+1))) #random permutation matrix
     
+<<<<<<< Updated upstream
     public_key = S @ G1 @ A @ P
     private_key = {"S":S, "P":P, "A":A, "rs_code":rs_code, "GF":GF, "n":n, "r":r}
+=======
+    public_key = {"G":(S @ G1 @ A @ P), "n":n, "r":r, "k":k}
+    private_key = {"S":S, "P":P, "A":A, "rs_code":rs_code, "GF":GF, "n":n, "r":r, "t":t, "G_pub":public_key}
+>>>>>>> Stashed changes
     
     return (public_key, private_key)
 
@@ -66,7 +132,8 @@ def generate_random_permutation_matrix(n) -> np.ndarray:
     return permutation_matrix
 
 
-def encrypt(G: galois.FieldArray, message: np.ndarray, weight: int) -> galois.FieldArray:
+def encrypt(public_key: dict, message: np.ndarray, weight: int) -> galois.FieldArray:
+    G=public_key["G"]
     GF = type(G) # Get the finite field from the generator matrix
     
     e = GF.Zeros(G.shape[1])
@@ -109,31 +176,129 @@ def decrypt(private_key: dict, ciphertext: galois.FieldArray) -> galois.FieldArr
     return decrypted_message
 
 
+def get_row_space(matrix):
+    rref_matrix=matrix.row_reduce()
+    is_non_zero_row = np.any(rref_matrix, axis=1)
+    basis = rref_matrix[is_non_zero_row]
+    return basis
+
+def get_schur_square_dimension(matrix: galois.FieldArray) -> int:
+    """Calculates the dimension of the Schur square of the row space of the matrix."""
+    basis_vector = get_row_space(matrix)
+    num_basis_vectors = basis_vector.shape[0]
+    
+    generating_set = []
+    for i in range(num_basis_vectors):
+        for j in range(i, num_basis_vectors): # Start j from i to get unique pairs
+            v_i = basis_vector[i]
+            v_j = basis_vector[j]
+            schur_product = v_i * v_j
+            generating_set.append(schur_product)
+    
+    if not generating_set:
+        return 0
+
+    # FIX: Get the specific Galois Field class from the input matrix
+    GF = type(matrix)
+    # Instantiate the schur_matrix using the correct Field class
+    schur_matrix = GF(generating_set)
+    
+    dim_ref = np.linalg.matrix_rank(schur_matrix)
+    return dim_ref
+
+def crack_permutation(public_key: dict) -> galois.FieldArray:
+    G=public_key["G"]
+    total_columns = G.shape[1]
+    
+    dim_ref = get_schur_square_dimension(G)
+    goppa_indices = []
+    #foreach column in public_key["G"]
+    for j in range(total_columns):
+        g_punctured = np.delete(G, j, axis=1)
+        dim_ref_punctured = get_schur_square_dimension(g_punctured)
+        if(dim_ref_punctured==dim_ref):
+            goppa_indices.append(j)
+    
+    n=public_key["n"]
+    if len(goppa_indices) != n:
+        raise ValueError(f"Attack failed: Expected to find {n} columns, but found {len(goppa_indices)}.")
+    
+    
+    G_real = G[:, goppa_indices]
+    
+    return G_real
+    
+
+
+
+
+
 if __name__ == "__main__":
     
-    # Define system parameters (valid for Reed-Solomon over GF(16))
-    n = 255  # Code length
-    k = 235   # Message dimension
-    t = 10   # Error correction capability (t <= (n-k)/2)
+    # Use smaller, faster parameters for the demonstration
+    n = 15  # Code length (must be <= GF order - 1)
+    k = 7   # Message dimension
+    t = 4   # Error correction capability (t <= (n-k)/2)
     r = 1   # Dimension of random matrices
     
     # 1. Generate a valid public/private key pair
+    print("--- KEY GENERATION ---")
     public_key, private_key = KeyGen(n=n, k=k, t=t, r=r)
-    
-    # 2. Define the message (must be k symbols long from GF(16))
     GF = private_key["GF"]
-    message_to_encrypt = GF.Random(k) # Create a random message in the correct field
+    print(f"Keys generated for parameters n={n}, k={k}, t={t}, r={r} over {GF.name}")
+    print(f"Public key matrix shape: {public_key['G'].shape}\n")
     
-    # 3. Encrypt the message
+    # 2. Encrypt and Decrypt Normally (Control Group)
+    print("--- NORMAL OPERATION (CONTROL) ---")
+    message_to_encrypt = GF.Random(k)
     ciphertext = encrypt(public_key, message_to_encrypt, weight=t)
-    
-    # 4. Decrypt the message
     decrypted_message = decrypt(private_key, ciphertext)
-    
-    # 5. Verify the result
     is_correct = np.array_equal(message_to_encrypt, decrypted_message)
+    print("Original Message: ", message_to_encrypt)
+    print("Decrypted Message:", decrypted_message)
+    print(f"Success: {is_correct} {'✅' if is_correct else '❌'}\n")
     
+<<<<<<< Updated upstream
     print("\n--- McEliece Cryptosystem Verification ---")
     print("Original Message: ", message_to_encrypt)
     print("Decrypted Message:", decrypted_message)
     print("Success:", is_correct, "✅" if is_correct else "❌")
+=======
+    # 3. --- NEW: SIMULATE ATTACK ---
+    print("--- ATTACK SIMULATION ---")
+    print("Step 1: Cracking permutation P to find G_real...")
+    try:
+        # Run the attack to get the unscrambled, real generator matrix
+        G_real = crack_permutation(public_key)
+
+        print("\nStep 2: Verifying the cracked key G_real...")
+        # Create a new, vulnerable code from the cracked matrix
+        # galois.LinearCode is more general than ReedSolomon for this purpose
+        cracked_code = galois.LinearCode(G_real)
+        
+        # Create a new message to test the cracked code
+        message_for_attack = GF.Random(k)
+        print("New test message:", message_for_attack)
+
+        # Encode the message using the cracked matrix
+        codeword = message_for_attack @ G_real
+        
+        # Create an error vector with weight t for the shorter codeword
+        error = GF.Zeros(n)
+        error_indices = np.random.choice(n, t, replace=False)
+        error[error_indices] = GF.Random(t, low=1)
+        
+        noisy_codeword = codeword + error
+        print(f"Created a noisy codeword with {t} errors.")
+        
+        # Decode using the new, vulnerable code
+        decoded_attack_message = cracked_code.decode(noisy_codeword, output="message")
+        print("Decoded message: ", decoded_attack_message)
+
+        # Verify the result
+        is_attack_correct = np.array_equal(message_for_attack, decoded_attack_message)
+        print(f"Attack verification success: {is_attack_correct} {'✅' if is_attack_correct else '❌'}")
+
+    except ValueError as e:
+        print(f"\nAttack failed: {e} ❌")
+>>>>>>> Stashed changes

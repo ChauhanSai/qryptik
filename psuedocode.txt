@@ -1,0 +1,58 @@
+FUNCTION CrackPermutation(G_pub, n, k, r)
+    //
+    // INPUTS:
+    //   G_pub: The k x n*(r+1) public key matrix over a finite field.
+    //   n, k, r: The public system parameters.
+    //
+    // OUTPUT:
+    //   Goppa_Indices: A set of n integers corresponding to the column indices
+    //                  of the permuted Reed-Solomon code.
+    //
+
+BEGIN
+    // 1. Calculate the dimension of the Schur product space for the full public key.
+    //    This will serve as our reference dimension.
+
+    // Let V be the vector space spanned by the k rows of G_pub.
+    V = RowSpace(G_pub)
+
+    // Construct a matrix whose rows are the Schur products of the basis vectors of V.
+    // There are k*(k+1)/2 such unique products (v_i * v_j).
+    Schur_Matrix_Ref = matrix([v_i * v_j for all pairs of basis vectors v_i, v_j in V])
+    
+    // The dimension is the rank of this matrix.
+    dim_ref = Rank(Schur_Matrix_Ref)
+
+    // 2. Initialize an empty set to store the identified Goppa column indices.
+    Goppa_Indices = {}
+
+    // 3. Iterate through every column of the public key to test it.
+    Total_Columns = n * (r + 1)
+    FOR j FROM 0 TO Total_Columns - 1 DO
+
+        // a. Create a "punctured" matrix by removing the j-th column.
+        G_punctured = G_pub with column j removed
+
+        // b. Calculate the dimension of the Schur product space for the punctured matrix.
+        V_p = RowSpace(G_punctured)
+        Schur_Matrix_Punctured = matrix([v_i * v_j for all pairs of basis vectors v_i, v_j in V_p])
+        dim_p = Rank(Schur_Matrix_Punctured)
+
+        // c. Apply the test: If the dimension did not decrease, it's a Goppa column.
+        IF dim_p == dim_ref THEN
+            // This column belongs to the hidden Reed-Solomon structure.
+            Add j to Goppa_Indices
+        END IF
+
+    END FOR
+
+    // 4. Verify the result and return.
+    IF size(Goppa_Indices) == n THEN
+        RETURN Goppa_Indices
+    ELSE
+        // The attack failed, which is unlikely for these parameters
+        // but could indicate an issue or a different code structure.
+        RETURN ERROR("Failed to identify exactly n Goppa columns.")
+    END IF
+
+END FUNCTION

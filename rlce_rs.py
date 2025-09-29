@@ -71,9 +71,9 @@ class rlce_rs:
         
         e = GF.Zeros(G.shape[1])
         # Generate an error vector with a specified weight
-        one_indices = np.random.choice(G.shape[1], size=t, replace=False)
+        one_indices = np.random.choice(G.shape[1], size=t+1, replace=False)
         # The error values can be any non-zero element from the field
-        error_values = GF.Random(t, low=1)
+        error_values = GF.Random(t+1, low=1)
         e[one_indices] = error_values
         
         ciphertext = (GF(message) @ G + e)

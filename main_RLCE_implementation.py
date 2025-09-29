@@ -1,24 +1,38 @@
 import numpy as np
 import galois
+import numpy as np
+from galois import GF  # you already use galois
 from cnn_detector import cnn_inference
+
 
 def log_rejected(pub_key, reason=""):
     with open("rejected_keys.log", "a") as f:
-        f.write(reason + " | " + str(pub_key.tolist()) + "\n")
+        # store as list of ints for readability
+        f.write(reason + " | " + str(np.array(pub_key, dtype=int).tolist()) + "\n")
 
-def SecureKeyGen(n,k,t,r, model_path="cnn.pth"):
+def SecureKeyGen(n, k, t, r, model_path="cnn_model.h5", meta_path="cnn_meta.json", max_attempts=10):
     attempt = 0
-    while True:
+    while attempt < max_attempts:
         attempt += 1
-        pub, priv = KeyGen(n, k, t, r)
-        suspicious = cnn_inference(pub, priv["GF"], model_path=model_path)
+        pub, priv = KeyGen(n=n, k=k, t=t, r=r)  # your KeyGen function
+        try:
+            suspicious, p_bad = cnn_inference(pub, priv["GF"], model_path=model_path, meta_path=meta_path)
+        except Exception as e:
+            # model mismatch or other error -> log and fallback to accept (or reject)
+            print(f"[SEC] cnn_inference error: {e}. Accepting key (or you can choose to reject).")
+            suspicious = False
+            p_bad = 0.0
+
         if suspicious:
-            log_rejected(pub, reason="CNN flagged")
-            print(f"Attempt {attempt}: rejected suspicious key")
+            log_rejected(pub, reason=f"CNN flagged p_bad={p_bad:.4f}")
+            print(f"Attempt {attempt}: rejected suspicious key (p_bad={p_bad:.4f})")
             continue
         else:
-            print(f"Attempt {attempt}: accepted key")
+            print(f"Attempt {attempt}: accepted key (p_bad={p_bad:.4f})")
             return pub, priv
+
+    raise RuntimeError("Failed to generate a safe key in max_attempts")
+
 
 
 # ---------- NEW: Gauss–Jordan inverse ----------

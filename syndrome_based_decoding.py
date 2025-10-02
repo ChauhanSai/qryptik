@@ -2,22 +2,23 @@ import numpy as np
 import torch
 import galois
 import torch.nn as nn
+import torch.optim as optim # <-- NEW IMPORT for optimization
 import time
-from main import KeyGen, encrypt, decrypt
 
+# ==============================================================================
+# -------------------- RNN PARAMETERS (ATTACK TARGET) --------------------------
+# ==============================================================================
+
+N_TARGET = 255 # Actual Codeword length (n) from KeyGen
+K_TARGET = 235 # Actual Message dimension (k) from KeyGen
+M_TARGET = N_TARGET - K_TARGET # syndrome length (n-k)
+SNR_DB = 1.0  # signal to noise ratio
+ERROR_WEIGHT_TARGET = 10 # max error weight
 
 # ==============================================================================
 # -------------------- SYNDROME-RNN DECODER (THE ATTACK) -----------------------
 # ==============================================================================
 
-# --- RNN PARAMETERS FOR ATTACK SIMULATION ---
-# These parameters are for the *simulated* attack target, scaled down 
-# from the massive size of the actual RLCE public key.
-N_ATTACK = 60  # Simulated Codeword length (N)
-K_ATTACK = 40  # Simulated Message dimension (K)
-M_ATTACK = N_ATTACK - K_ATTACK # Syndrome length (M)
-SNR_DB = 1.0       # Signal-to-Noise Ratio (simulating channel noise)
-ERROR_WEIGHT = 5   # Simulated errors introduced (t)
 
 class SyndromeRNN(nn.Module):
     """
@@ -43,30 +44,88 @@ class SyndromeRNN(nn.Module):
 
     def forward(self, combined_input):
         # Unroll the single input vector N times to simulate iterative decoding over N bits
+        # combined_input shape: (batch_size, M + N)
+        # sequence_input shape: (batch_size, N, M + N)
         sequence_input = combined_input.unsqueeze(1).repeat(1, self.n, 1)
         
         # Forward pass through the LSTM
         rnn_output, _ = self.rnn(sequence_input)
         
         # Use the output of the final time step
+        # final_rnn_output shape: (batch_size, hidden_size)
         final_rnn_output = rnn_output[:, -1, :] 
         
-        # Predict the N-bit error vector
+        # Predict the N-bit error vector logits
+        # final_output shape: (batch_size, N)
         final_output = self.fc_out(final_rnn_output) 
         
-        # Convert logits to probability (0 to 1)
+        # Convert logits to probability (0 to 1) using Sigmoid
         error_probability = torch.sigmoid(final_output)
         
-        # Hard decision: predict error (1) if probability > 0.5
+        # Hard decision: predict error (1) if probability > 0.5 (used for final prediction/analysis)
         predicted_error = (error_probability > 0.5).int()
         
         return predicted_error, error_probability
 
-# --- ATTACK HELPER FUNCTIONS ---
+# ==============================================================================
+# -------------------- ATTACK DATA & TRAINING LOGIC ----------------------------
+# ==============================================================================
+
+def train_syndrome_rnn(model, H_matrix, num_epochs=5, batch_size=64, learning_rate=1e-3):
+    """
+    Trains the SyndromeRNN model using synthetically generated noisy samples.
+    """
+    # 1. Define Loss Function and Optimizer
+    # BCELoss is used because the output (error_probability) is sigmoid-activated (0 to 1)
+    criterion = nn.BCELoss() 
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    
+    # Set the model to training mode
+    model.train()
+    
+    # Define a number of steps per epoch to simulate continuous data generation
+    steps_per_epoch = 1000 
+    
+    print(f"\n[TRAINING] Starting training for {num_epochs} epochs...")
+    print(f"[TRAINING] {steps_per_epoch} steps per epoch, Batch Size: {batch_size}")
+    
+    for epoch in range(num_epochs):
+        total_loss = 0.0
+        start_time = time.time()
+        
+        for step in range(steps_per_epoch):
+            
+            # --- Data Generation (Creates a batch of synthetic samples on the fly) ---
+            batch_inputs, batch_labels = [], []
+            for _ in range(batch_size):
+                # Generate a single sample (input and true error vector/label)
+                rnn_input, true_error, _ = generate_noisy_input(H_matrix)
+                batch_inputs.append(rnn_input)
+                batch_labels.append(true_error)
+            
+            # Combine individual tensors into batch tensors
+            inputs = torch.cat(batch_inputs, dim=0)
+            labels = torch.cat(batch_labels, dim=0) 
+            
+            # 2. PyTorch Training Step
+            optimizer.zero_grad()      # Reset gradients
+            _, predicted_probabilities = model(inputs) # Forward pass
+            loss = criterion(predicted_probabilities, labels) # Compute loss
+            loss.backward()            # Backpropagation (compute gradients)
+            optimizer.step()           # Update weights
+            
+            total_loss += loss.item()
+            
+        avg_loss = total_loss / steps_per_epoch
+        end_time = time.time()
+        print(f"Epoch [{epoch+1}/{num_epochs}] | Avg Loss: {avg_loss:.4f} | Time: {end_time - start_time:.2f}s")
+
+    print("[TRAINING] Training Complete.")
+    return model
 
 def generate_rlce_H():
     """Generates a dense random binary H matrix for the attack target simulation."""
-    N, M = N_ATTACK, M_ATTACK
+    N, M = N_TARGET, M_TARGET
     H_random = np.random.randint(0, 2, size=(M, N), dtype=int)
     
     # Ensure all columns have at least one '1'
@@ -81,7 +140,7 @@ def generate_noisy_input(H):
     
     # 1. Generate Error Vector (e)
     true_error_vector = np.zeros(N, dtype=int)
-    one_indices = np.random.choice(N, size=ERROR_WEIGHT, replace=False)
+    one_indices = np.random.choice(N, size=ERROR_WEIGHT_TARGET, replace=False)
     true_error_vector[one_indices] = 1
     
     # Received codeword y (hard decision) = e
@@ -100,6 +159,7 @@ def generate_noisy_input(H):
     # Combine Syndrome and LLRs
     rnn_input = np.concatenate([syndrome, LLR_input])
     
+    # Tensors must be float32 for model input/labels
     return (
         torch.tensor(rnn_input, dtype=torch.float32).unsqueeze(0), 
         torch.tensor(true_error_vector, dtype=torch.float32).unsqueeze(0), 
@@ -112,73 +172,59 @@ def generate_noisy_input(H):
 
 if __name__ == "__main__":
     
-    # --- PART 1: Run Original RLCE Validation (Using imported functions) ---
-    
-    n = 255 
-    k = 235 
-    t = 10 
-    r = 1 
+    # The original RLCE validation block has been removed as those functions
+    # (KeyGen, encrypt, decrypt) were not available.
     
     print("-" * 70)
-    print("PART 1: ORIGINAL RLCE ENCRYPTION/DECRYPTION VALIDATION (via import)")
-    
-    try:
-        start_time = time.time()
-        public_key, private_key = KeyGen(n=n, k=k, t=t, r=r)
-        GF = private_key["GF"]
-        message_to_encrypt = GF.Random(k)
-        ciphertext = encrypt(public_key, message_to_encrypt, weight=t)
-        decrypted_message = decrypt(private_key, ciphertext)
-        is_correct = np.array_equal(message_to_encrypt, decrypted_message)
-        end_time = time.time()
-        
-        print(f"Time: {end_time - start_time:.4f}s")
-        print(f"Original System Params: n={n}, k={k}, t={t}, r={r}")
-        print("Success:", is_correct, "✅" if is_correct else "❌")
-    except Exception as e:
-        print(f"RLCE Validation Failed: {e}")
-        print("Please ensure your 'rlce_encryption.py' file is accessible and correct.")
-        
-    print("-" * 70)
-    
-    # --- PART 2: Syndrome-RNN Cryptanalytic Attack Simulation ---
-    
-    print("\nPART 2: SYNDROME-RNN ATTACK SIMULATION")
-    print("Simulating attack on scaled-down binary target (N=60, K=40)")
+    print("SYNDROME-RNN ATTACK SIMULATION AND TRAINING")
+    print("Simulating cryptanalytic attack on dense random binary code.")
     print("-" * 70)
     
     # 1. Define the random binary H matrix (the structure the RNN attacks)
     H_rlce_target = generate_rlce_H()
     
-    # 2. Generate the necessary inputs for the RNN
-    combined_input, true_error, syndrome = generate_noisy_input(H_rlce_target)
+    # 2. Initialize the Syndrome-RNN Decoder model
+    # Use larger hidden size and layers for a more robust (though slower) model
+    model = SyndromeRNN(N_TARGET, M_TARGET, hidden_size=128, num_layers=3)
     
-    # 3. Initialize the Syndrome-RNN Decoder model
-    model = SyndromeRNN(N_ATTACK, M_ATTACK)
+    print(f"Attack Params: N={N_TARGET}, K={K_TARGET}, M={M_TARGET}, Errors={ERROR_WEIGHT_TARGET}, SNR={SNR_DB} dB")
     
-    print(f"Attack Params: N={N_ATTACK}, K={K_ATTACK}, M={M_ATTACK}, Errors={ERROR_WEIGHT}, SNR={SNR_DB} dB")
-    print("Model Status: UNTRAINED (Real attack requires millions of training examples)")
+    # 3. TRAIN THE MODEL HERE
+    # The training function is called to optimize the model's weights.
+    trained_model = train_syndrome_rnn(
+        model, 
+        H_rlce_target, 
+        num_epochs=250,
+        batch_size=128, # Training samples per step
+        learning_rate=5e-4
+    )
 
-    # 4. Run the Decoder (Inference)
+    # 4. Run the Decoder (Inference on a fresh, unseen sample)
+    print("\n--- INFERENCE ON A FRESH SAMPLE (Using Trained Model) ---")
+    combined_input_test, true_error_test, syndrome_test = generate_noisy_input(H_rlce_target)
+    
+    # Set model to evaluation mode (disables dropout, etc.)
+    trained_model.eval() 
     attack_start_time = time.time()
-    with torch.no_grad():
-        predicted_error, _ = model(combined_input)
+    with torch.no_grad(): # Disable gradient calculation for efficiency
+        predicted_error, _ = trained_model(combined_input_test)
     attack_end_time = time.time()
         
     # 5. Analyze Results
-    true_error_int = true_error.int()
-    num_correct_bits = (predicted_error == true_error_int).sum().item()
-    num_errors_in_prediction = N_ATTACK - num_correct_bits
+    true_error_int = true_error_test.int()
+    predicted_error_int = predicted_error.int()
+    
+    # Calculate difference (Hamming distance between true and predicted error vectors)
+    error_vector_diff = (predicted_error_int != true_error_int).sum().item()
     
     print(f"Inference Time: {attack_end_time - attack_start_time:.6f}s")
-    print("\nSyndrome RNN Decoding Results:")
-    print(f"Input Syndrome (Binary): {syndrome.tolist()}")
-    print(f"True Error Vector:       {true_error_int.tolist()[0]}")
-    print(f"Predicted Error Vector:  {predicted_error.tolist()[0]}")
+    print("\nSyndrome RNN Decoding Results (Test Sample):")
+    print(f"Input Syndrome (Binary): {syndrome_test.tolist()}")
+    print(f"True Error Vector Hamming Weight: {true_error_int.sum().item()}")
     
     print("\n--- ATTACK OUTCOME ---")
-    if num_errors_in_prediction == 0:
-        print(f"Perfect Decoding Success! The RNN correctly predicted the error vector.")
+    if error_vector_diff == 0:
+        print("Perfect Decoding Success! The trained RNN correctly predicted the error vector.")
     else:
-        print(f"Decoded with {num_errors_in_prediction} errors remaining. (Attack Failure - Requires Training)")
+        print(f"Decoding Failure: {error_vector_diff} bit errors remain in the prediction.")
     print("-" * 70)

@@ -23,8 +23,8 @@ This combination of approaches creates a mobile-ready, quantum-resistant encrypt
   - CNN-based filters evaluate candidate public keys for tampering or weaknesses.
   - Only strong, validated keys are published, improving system security.
 2. Neural Network Decoding:
-  a. BP-RNN: Converts RLCE ciphertexts into parity-check graphs and iteratively decodes beyond the classical error-correction limit.
-  b. Syndrome-based CNN: Computes codeword syndromes, compares with original message syndromes, and applies neural correction if classical decoding fails.
+    1. BP-RNN: Converts RLCE ciphertexts into parity-check graphs and iteratively decodes beyond the classical error-correction limit.
+    2. Syndrome-based CNN: Computes codeword syndromes, compares with original message syndromes, and applies neural correction if classical decoding fails.
 
 ## 🌍 Impact
 Qryptik has far-reaching implications for the future of secure computing:

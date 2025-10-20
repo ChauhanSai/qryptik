@@ -9,14 +9,14 @@ from rgnn import rgnn
 from rlce_rs import rlce_rs
 
 # --- 1. Configuration ---
-RLCE_KEY_NAME = 'keys/rlce_key_01.npz'
+RLCE_KEY_NAME = 'keys/rlce_key_03.npz'
 rlce_key = rlce_rs.load(RLCE_KEY_NAME)
 KEY_ID = rlce_key.KEY_ID
-MODEL_ID = 10 # Match the model version you want to test
+MODEL_ID = 2 # Match the model version you want to test
 
 # This should point to the model saved by your training script's ModelCheckpoint
-TRAINED_MODEL_FILENAME = f'models/trained/rgnn_model_{KEY_ID}.{MODEL_ID:02d}'
-ERROR_WEIGHT_TO_TEST = rlce_key.t + 1
+TRAINED_MODEL_FILENAME = f'models/trained/rgnn_base_model_3.03'
+ERROR_WEIGHT_TO_TEST = 1
 
 # --- Extract graph structure once ---
 H_indices = np.where(np.array(rlce_key.H, dtype=np.int32) == 1)

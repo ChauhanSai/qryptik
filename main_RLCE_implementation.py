@@ -3,7 +3,7 @@ import galois
 import numpy as np
 from galois import GF  # you already use galois
 from cnn_detector import cnn_inference
-
+from tamper_utils import tamper_pubkey_zero_cols 
 
 def log_rejected(pub_key, reason=""):
     with open("rejected_keys.log", "a") as f:
@@ -15,6 +15,7 @@ def SecureKeyGen(n, k, t, r, model_path="cnn_model.h5", meta_path="cnn_meta.json
     while attempt < max_attempts:
         attempt += 1
         pub, priv = KeyGen(n=n, k=k, t=t, r=r)  # your KeyGen function
+        bad_pub = tamper_pubkey_zero_cols(pub, num_zero_cols=8)
         try:
             suspicious, p_bad = cnn_inference(pub, priv["GF"], model_path=model_path, meta_path=meta_path)
         except Exception as e:

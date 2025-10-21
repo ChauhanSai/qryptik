@@ -3,65 +3,90 @@ import json
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models
+from pathlib import Path
 
-def pubkey_to_vector(pub_key):
+# ---------------- preproc helpers ----------------
+def pubkey_to_tensor(pub: np.ndarray) -> np.ndarray:
     """
-    Convert galois.FieldArray / numpy array to 1D int vector.
+    Build a 3-channel image-like tensor: (k, n_total, 3)
+    C0: raw normalized to [0,1] by dividing by max element (assume field q-1)
+    C1: row-wise z-score
+    C2: zero mask (1 if exactly zero else 0)
     """
-    arr = np.array(pub_key, dtype=int)
-    return arr.flatten().astype(np.int64)
+    X = pub.astype(np.float32)
+    k, n = X.shape
+    maxv = float(max(1, X.max()))
+    c0 = X / maxv
 
-def build_cnn(input_len, num_classes=2):
+    # row-wise z
+    mu = c0.mean(axis=1, keepdims=True)
+    sd = c0.std(axis=1, keepdims=True) + 1e-6
+    c1 = (c0 - mu) / sd
+
+    # zero mask
+    c2 = (pub == 0).astype(np.float32)
+
+    out = np.stack([c0, c1, c2], axis=-1)  # (k, n, 3)
+    return out
+
+# ---------------- model ----------------
+def build_cnn_2d(input_shape, num_classes=2):
     """
-    Build a small 1D CNN for flattened public keys.
-    Input shape for Keras: (input_len, 1)
+    input_shape = (k, n_total, 3)
     """
-    inp = layers.Input(shape=(input_len, 1))
-    x = layers.Conv1D(32, kernel_size=5, padding="same", activation="relu")(inp)
-    x = layers.MaxPool1D(pool_size=2)(x)
-    x = layers.Conv1D(64, kernel_size=5, padding="same", activation="relu")(x)
-    x = layers.MaxPool1D(pool_size=2)(x)
-    x = layers.Flatten()(x)
-    x = layers.Dense(256, activation="relu")(x)
-    out = layers.Dense(num_classes, activation="softmax")(x)
-    model = models.Model(inputs=inp, outputs=out)
-    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+    inp = layers.Input(shape=input_shape)
+    x = layers.Conv2D(32, (3, 7), padding='same', activation='relu')(inp)
+    x = layers.BatchNormalization()(x)
+    x = layers.Conv2D(64, (3, 7), padding='same', activation='relu')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.MaxPool2D((2, 2))(x)
+
+    x = layers.Conv2D(128, (3, 5), padding='same', activation='relu')(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.25)(x)
+
+    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.Dense(128, activation='relu')(x)
+    x = layers.Dropout(0.3)(x)
+    out = layers.Dense(num_classes, activation='linear')(x)  # we’ll use from_logits=True
+
+    model = models.Model(inp, out)
     return model
 
-def save_model_and_meta(model, model_path="cnn_model.h5", meta_path="cnn_meta.json", input_len=None):
-    """
-    Save the Keras model (HDF5) and a small JSON metadata file that stores input_len.
-    """
+# focal loss
+def focal_loss(gamma=2.0, alpha=0.5):
+    def _loss(y_true, y_logits):
+        y_true = tf.cast(y_true, tf.int32)
+        y_true_oh = tf.one_hot(y_true, depth=2)
+        ce = tf.nn.softmax_cross_entropy_with_logits(labels=y_true_oh, logits=y_logits)
+        p_t = tf.reduce_sum(y_true_oh * tf.nn.softmax(y_logits), axis=1)
+        loss = alpha * tf.pow(1. - p_t, gamma) * ce
+        return tf.reduce_mean(loss)
+    return _loss
+
+# ---------------- save/load ----------------
+def save_model_and_meta(model, model_path, meta_path, input_shape, threshold):
     model.save(model_path)
-    meta = {"input_len": int(input_len)}
+    meta = {"input_shape": input_shape, "threshold": float(threshold)}
     with open(meta_path, "w") as f:
         json.dump(meta, f)
 
 def load_model_and_meta(model_path="cnn_model.h5", meta_path="cnn_meta.json"):
-    """
-    Load model and metadata. Returns (model, input_len)
-    """
+    model = tf.keras.models.load_model(model_path, compile=False)
     with open(meta_path, "r") as f:
         meta = json.load(f)
-    input_len = int(meta["input_len"])
-    model = models.load_model(model_path)
-    return model, input_len
+    return model, meta
+# add to cnn_detector.py
+def cnn_inference(pub, GF, model_path="cnn_model.h5", meta_path="cnn_meta.json"):
+    """
+    Returns (suspicious: bool, p_bad: float in [0,1]) using saved threshold.
+    """
+    model, meta = load_model_and_meta(model_path, meta_path)
+    thr = meta.get("threshold", 0.5)
 
-def cnn_inference(pub_key, GF, model_path="cnn_model.h5", meta_path="cnn_meta.json"):
-    """
-    Run CNN inference: returns boolean suspicious, float score (probability of 'bad' class)
-    - pub_key: galois.FieldArray or numpy array (k x n*(r+1))
-    - GF: field object (to get GF.order)
-    """
-    model, input_len = load_model_and_meta(model_path, meta_path)
-    vec = pubkey_to_vector(pub_key).astype(np.float32)
-    # normalize to [0,1] by dividing by q-1
-    q = GF.order
-    vec = vec / float(q - 1)
-    if vec.shape[0] != input_len:
-        raise ValueError(f"Input length {vec.shape[0]} does not match model input_len {input_len}")
-    x = vec.reshape(1, input_len, 1)  # batch=1, length, channels=1
-    probs = model.predict(x, verbose=0)[0]  # [p_good, p_bad]
-    p_bad = float(probs[1])
-    suspicious = p_bad > 0.5  # you can tune threshold
-    return suspicious, p_bad
+    X = pubkey_to_tensor(np.array(pub, dtype=np.int32))
+    X = np.expand_dims(X, axis=0)  # batch
+    logits = model.predict(X, verbose=0)[0]
+    p = tf.nn.softmax(logits).numpy()
+    p_bad = float(p[1])
+    return (p_bad >= thr), p_bad

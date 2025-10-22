@@ -71,7 +71,8 @@ class SyndromeRNN(nn.Module):
 # -------------------- ATTACK DATA & TRAINING LOGIC ----------------------------
 # ==============================================================================
 
-def train_syndrome_rnn(model, H_matrix, num_epochs=5, batch_size=64, learning_rate=1e-3):
+def train_syndrome_rnn(model, H_matrix, num_epochs=50
+, batch_size=64, learning_rate=1e-3):
     """
     Trains the SyndromeRNN model using synthetically generated noisy samples.
     """
@@ -194,7 +195,7 @@ if __name__ == "__main__":
     trained_model = train_syndrome_rnn(
         model, 
         H_rlce_target, 
-        num_epochs=250,
+        num_epochs=50,
         batch_size=128, # Training samples per step
         learning_rate=5e-4
     )

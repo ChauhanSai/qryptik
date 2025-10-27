@@ -44,9 +44,9 @@ print("Graph structure derived successfully.")
 print("\n--- Instantiating and Building the RGNN Model ---")
 model = rgnn(
     adjacency_lists=ADJACENCY_DATA,
-    num_iterations=30,
-    hidden_dim=256,
-    dropout_rate=0.3
+    num_iterations=12,
+    hidden_dim=128,
+    dropout_rate=0.2
 )
 
 # Build the model by creating and calling it with a sample input
@@ -61,7 +61,7 @@ print("Model successfully built.")
 model.summary()
 
 # --- 3. Compile the Model ---
-LEARNING_RATE = 5e-4
+LEARNING_RATE = 1e-3
 optimizer = tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE)
 model.compile(
     optimizer=optimizer,
@@ -71,7 +71,7 @@ model.compile(
 print("\nModel compiled successfully.")
 
 # --- 4. Save the Untrained Model ---
-MODEL_ID = 2 # Or your desired version number
+MODEL_ID = 3 # Or your desired version number
 BASE_MODEL_FILENAME = f'models/untrained/base_rgnn_model_{KEY_ID}.{MODEL_ID:02d}'
 print(f"\nSaving untrained model to {BASE_MODEL_FILENAME}...")
 

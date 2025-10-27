@@ -16,25 +16,24 @@ from rgnn import rgnn
 from rlce_rs import rlce_rs
 
 # --- 1. Configuration and Setup ---
-RLCE_KEY_NAME = 'keys/rlce_key_03.npz'  # Update to your t=8 key
+RLCE_KEY_NAME = 'keys/rlce_key_04.npz'  # Update to your key
 rlce_key = rlce_rs.load(RLCE_KEY_NAME)
-KEY_ID = rlce_key.KEY_ID
-MODEL_ID = 3 # Increment for the new training run
+KEY_ID = 4
+MODEL_ID = 1
+MODEL_VERSION = 1
 
 # This should point to the base model you created
-BASE_MODEL_FILENAME = f'models/untrained/base_rgnn_model_{KEY_ID}.02' 
-# The checkpoint will save the best wrapped model
-TRAINED_MODEL_FILENAME = f'models/trained/rgnn_model_{KEY_ID}.{MODEL_ID:02d}'
-# After training, we'll extract and save just the base model
-TRAINED_BASE_MODEL_FILENAME = f'models/trained/rgnn_base_model_{KEY_ID}.{MODEL_ID:02d}'
+BASE_MODEL_FILENAME = f'models/untrained/base_rgnn_model_3.03' 
+TRAINED_MODEL_FILENAME_WRAPPER = f'models/trained/rgnn_model_{KEY_ID}.{MODEL_ID}.{MODEL_VERSION:02d}_trainable'
+TRAINED_MODEL_FILENAME_DONE = f'models/trained/rgnn_model_{KEY_ID}.{MODEL_ID}.{MODEL_VERSION:02d}'
 
 # Training Hyperparameters - START EASY
 NUM_ERRORS_TO_TRAIN = [1]
 BATCH_SIZE = 32
-EPOCHS = 200
+EPOCHS = 300
 STEPS_PER_EPOCH = 500  # More data
 VALIDATION_STEPS = 100
-LEARNING_RATE = 5e-4  # Conservative learning rate
+LEARNING_RATE = 1e-3
 
 # --- Extract necessary data BEFORE the pipeline ---
 H_matrix_np = np.array(rlce_key.H, dtype=np.float32)
@@ -68,7 +67,7 @@ def data_generator_weighted(h_matrix, num_vars, possible_num_errors):
         # Create sample weights: much higher weight for error positions
         # This tells the model "getting errors right is 15x more important"
         sample_weights = np.ones(num_vars, dtype=np.float32)
-        sample_weights[error_indices] = 800.0
+        sample_weights[error_indices] = 50.0
         
         yield syndrome, error_vector, sample_weights
 
@@ -169,7 +168,7 @@ model.base_model.summary()
 # --- 5. Define Callbacks ---
 print("\nSetting up training callbacks...")
 checkpoint_callback = ModelCheckpoint(
-    filepath=TRAINED_MODEL_FILENAME,
+    filepath=TRAINED_MODEL_FILENAME_WRAPPER,
     monitor='val_recall',
     save_best_only=True,
     mode='max',
@@ -183,12 +182,12 @@ checkpoint_callback = ModelCheckpoint(
 # )
 early_stopping_callback = EarlyStopping(
     monitor='val_recall',   # The metric to watch
-    patience=20,            # How many epochs to wait for improvement
+    patience=30,            # How many epochs to wait for improvement
     mode='max',             # We want to maximize recall
     restore_best_weights=True # Automatically restore the best model weights at the end
 )
 reduce_lr_callback = ReduceLROnPlateau(
-    monitor='val_loss',
+    monitor='val_recall',
     factor=0.5,
     patience=10,
     min_lr=1e-7,
@@ -271,8 +270,8 @@ finally:
 
 
 # --- 9. Extract and Save Base Model ---
-print(f"\nExtracting base model and saving to {TRAINED_BASE_MODEL_FILENAME}...")
-model.base_model.save(TRAINED_BASE_MODEL_FILENAME, save_format='tf')
+print(f"\nExtracting base model and saving to {TRAINED_MODEL_FILENAME_DONE}...")
+model.base_model.save(TRAINED_MODEL_FILENAME_DONE, save_format='tf')
 print("Base model saved successfully. Use this file for inference.")
 
 # --- 10. Training Summary ---
@@ -283,6 +282,6 @@ print(f"Initial loss: {history.history['loss'][0]:.4f}")
 print(f"Final loss: {history.history['loss'][-1]:.4f}")
 print(f"Loss improvement: {history.history['loss'][0] - history.history['loss'][-1]:.4f}")
 print(f"Best val_loss: {min(history.history['val_loss']):.4f}")
-print(f"Best model wrapper saved to: {TRAINED_MODEL_FILENAME}")
-print(f"Base model (for inference) saved to: {TRAINED_BASE_MODEL_FILENAME}")
+print(f"Best model wrapper saved to: {TRAINED_MODEL_FILENAME_WRAPPER}")
+print(f"Base model (for inference) saved to: {TRAINED_MODEL_FILENAME_DONE}")
 print("="*60)

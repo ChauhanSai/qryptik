@@ -1,0 +1,662 @@
+import numpy as np  # imports Numpy for arrays/matric ops
+import galois       # imports galois for finite-field math
+
+GF = galois.GF(2**6)  # creates a finite field where we will build all the matrices/vectors
+rng = np.random.default_rng()  # a random number generator we'll use for sampling positions and randomness
+
+# --- helper: determinant over GF (minimal Gaussian elimination) ---
+def _det_gf(M):
+    A = M.copy()
+    n = A.shape[0]
+    det = GF(1)
+    for i in range(n):
+        pivot = None
+        for r in range(i, n):
+            if A[r, i] != 0:
+                pivot = r; break
+        if pivot is None:
+            return GF(0)
+        if pivot != i:
+            A[[i, pivot], :] = A[[pivot, i], :]
+            # sign flip is irrelevant in characteristic 2, but keep flow identical
+        det *= A[i, i]
+        inv_pivot = GF(1) / A[i, i]
+        for r in range(i + 1, n):
+            factor = A[r, i] * inv_pivot
+            if factor != 0:
+                A[r, i:] -= factor * A[i, i:]
+    return det
+
+# --- helper: matrix inverse over GF (Gauss–Jordan) ---
+def _inv_gf(M):
+    A = M.copy()
+    n = A.shape[0]
+    I = GF.Zeros((n, n))
+    for i in range(n):
+        I[i, i] = GF(1)
+    # forward + backward elimination
+    for c in range(n):
+        # find pivot
+        p = None
+        for r in range(c, n):
+            if A[r, c] != 0:
+                p = r; break
+        if p is None:
+            raise ValueError("Matrix is singular in GF")
+        if p != c:
+            A[[c, p], :] = A[[p, c], :]
+            I[[c, p], :] = I[[p, c], :]
+        # scale pivot row to make pivot = 1
+        inv_piv = GF(1) / A[c, c]
+        A[c, :] *= inv_piv
+        I[c, :] *= inv_piv
+        # eliminate other rows
+        for r in range(n):
+            if r == c: continue
+            f = A[r, c]
+            if f != 0:
+                A[r, :] -= f * A[c, :]
+                I[r, :] -= f * I[c, :]
+    return I
+
+def random_invertible_square(n, *, GF=GF):
+    while True:
+        M = GF.Random((n,n))   # makes a random matrix in the field
+        if (_det_gf(M) != 0):  # computes a determinant in the field and returns a guaranteed invertible matrix
+            return M
+
+def premutation_matrix(n, *, GF=GF):  # build a random permutation matrix
+    perm = np.arange(n)
+    rng.shuffle(perm)
+    P = GF.Zeros((n,n))
+    P[np.arange(n), perm] = 1  # creates a n x n permutation matrix with 1s at (i,perm[i]) and 0s elsewhere
+    return P, perm  # returns both P and the index array perm
+
+def block_diag(blocks, *, GF=GF):  # Takes a list of square matrices and places them on the diagonal of a larger matrix
+    total = sum(b.shape[0] for b in blocks)
+    A = GF.Zeros((total, total))
+    offset = 0
+    # Fills zero everywhere, then copies each B into the right diagonal window
+    for B in blocks:
+        r = B.shape[0]
+        A[offset:offset+r, offset:offset+r] = B
+        offset += r
+    return A
+
+def hamming_weight(vec):  # counts how many entries in the vector are non-zero
+    # Hamming weight of a 1xN row vector over GF
+    return int(np.count_nonzero(vec != 0))
+
+# example parameters
+n , k = 63, 31  # base Reed-solomon code length n and dimension k
+t = (n-k) // 2  # Error - correcting capability of RS: t = n-k/2
+r = 1           # RLCE expansion factor. Each original column becomes a block of r+1 columns
+qN = n * (r+1)  # public key length after expansion (number of columns in RLCE public generator)
+
+# base code and its generator
+rs = galois.ReedSolomon(n, k, field=GF)  # gives us encode, decode and generator matrix
+Gs = rs.G                                 # The RS generator matrix Gs of shape k x n
+
+# RLCE key generation
+Ci_list = [GF.Random((k,r)) for _ in range(n)]  # For each original RS column, we'll append r random columns. Precompute all of them
+blocks = []
+for i in range(n):
+    gi = Gs[:, [i]]         # gi is the i-th column of Gs as a k x 1 matrix
+    Ci = Ci_list[i]         # random k x r block we attach to that column
+    blocks.append(np.concatenate([gi, Ci], axis=1))  # Concatenate horizontally to make a k x (r+1) block for position i and append
+
+G1 = np.concatenate(blocks, axis=1)  # concatenate all n blocks horizontally to form G1 ∈ GF^{k×n(r+1)}
+
+# Local mixing A
+A_blocks = [random_invertible_square(r+1) for _ in range(n)]  # for each expanded column block, make an independent (r+1) x (r+1) random invertible matrix
+A = block_diag(A_blocks)                                      # combine those into a big block diagonal matrix
+
+# Global scrambling
+S = random_invertible_square(k)     # an invertible k x k matrix to scramble rows
+P, _ = premutation_matrix(qN)       # A random permutation matrix of size qN to shuffle columns globally
+
+# public key
+G_pub = S @ G1 @ A @ P  # computes the public generator matrix
+priv = {"S": S, "Gs": Gs, "A": A, "P": P, "rs": rs, "n": n, "k": k, "r": r, "t": t}  # packs all secret pieces and parameters we'll need for decryption
+
+# Encryption
+def rlce_encrypt(m_row, G_pub, t):
+    assert m_row.shape == (1, G_pub.shape[0])  # checks whether message width matches the number of rows
+    qN = G_pub.shape[1]                        # get public length (number of columns)
+    y = m_row @ G_pub                          # compute the codeword mG over GF
+
+    # Add a sparse error of Hamming weight exactly t
+    positions = rng.choice(qN, size=t, replace=False)  # Pick t distinct positions for the error vector
+    e = GF.Zeros((1, qN))                              # start with an all-zero error row vector
+    vals = GF.Random(t)                                # draw t random field elements (could include 0)
+    # Ensures no zero symbols
+    for j in range(t):
+        if vals[j] == 0:
+            vals[j] = GF(1)
+    e[0, positions] = vals  # Place the nonzero error symbols into the chosen positions
+    return y + e            # final ciphertext y = mG + e
+
+# --- NEW BP-RNN Method ---
+
+def _gf_to_bits(vec_gf):
+    GF_type = type(vec_gf)    # Grabs the field class from this array
+    q = GF_type.order         # q is the field size
+    assert (q & (q - 1)) == 0 # checks q is a power of two
+    m = int(np.log2(q))       # number of bits per symbol
+    rows = []                 # collect each symbol's m bits
+    for a in vec_gf.ravel():  # iterate GF elements directly
+        rows.append(a.vector().astype(np.uint8))  # GF element -> m-bit vector
+    return np.vstack(rows).reshape(-1)            # flatten to length N*m
+
+def _bits_to_gf(bits_flat, GF_type):
+    q = GF_type.order
+    assert (q & (q - 1)) == 0
+    m = int(np.log2(q))
+    B = (bits_flat.reshape(-1, m) % 2)  # ensure 0/1
+    ints = (B * (2 ** np.arange(m, dtype=int))).sum(axis=1).astype(int)
+    return GF_type(ints).reshape(1, -1)
+
+# Starts a tiny RREF over GF(2)
+def _rref_mod2(A):
+    A = (A.copy() % 2).astype(np.uint8)  # copies the matrix, reduces entries modulo 2 , stores as 0/1 bytes
+    m, n = A.shape
+    r = 0
+    for c in range(n):
+        piv = None
+        for i in range(r, m):
+            if A[i, c] == 1:
+                piv = i; break
+        if piv is None:
+            continue
+        if piv != r:
+            A[[r, piv]] = A[[piv, r]]
+        for i in range(m):  # eliminate pivot column elsewhere using XOR
+            if i != r and A[i, c] == 1:
+                A[i, :] ^= A[r, :]
+        r += 1
+        if r == m:
+            break
+    keep = np.where(A.any(axis=1))[0]
+    return A[keep, :]
+
+# Builds a binary parity-check matrix from the RS parity-check over GF(2^m)
+def _rs_parity_check_binary(rs):
+    Hq = rs.H
+    GFq = type(Hq)
+    q = GFq.order
+    m = int(np.log2(q))
+
+    # Precompute binary linear maps for multiplication by a ∈ GF(2^m)
+    Mmap = {}
+    for a_int in range(q):
+        a = GFq(a_int)
+        cols = []
+        for j in range(m):
+            vj = GFq(1 << j)                 # one-hot basis element in GF(2^m)
+            prod = a * vj
+            cols.append(prod.vector().astype(np.uint8))
+        Mmap[a_int] = np.stack(cols, axis=1)
+
+    rH, cH = Hq.shape
+    H_bin = np.zeros((rH * m, cH * m), dtype=np.uint8)
+    for i in range(rH):
+        for j in range(cH):
+            H_bin[i*m:(i+1)*m, j*m:(j+1)*m] = Mmap[int(Hq[i, j])]
+    return _rref_mod2(H_bin % 2)  # reduce modulo 2 and prune dependent rows
+
+class _Tanner:
+    # Creates the Tanner graph
+    def __init__(self, H_bin):
+        self.H = (H_bin % 2).astype(np.uint8)
+        mC, nV = self.H.shape
+        edge_var, edge_chk = [], []
+        self.var_nbrs = [[] for _ in range(nV)]
+        self.chk_nbrs = [[] for _ in range(mC)]
+        e = 0
+        for c in range(mC):
+            cols = np.flatnonzero(self.H[c])
+            for v in cols:
+                edge_var.append(v); edge_chk.append(c)
+                self.var_nbrs[v].append(e)
+                self.chk_nbrs[c].append(e)
+                e += 1
+        self.edge_var = np.asarray(edge_var, dtype=np.int32)
+        self.edge_chk = np.asarray(edge_chk, dtype=np.int32)
+
+class BPRNN:
+    # Initialize a BP-RNN decoder, you can pass learned edge weights and a relaxation factor gamma
+    def __init__(self, H_bin, W_edge=None, W_out=None, gamma=0.875):
+        self.G = _Tanner(H_bin)  # Builds the Tanner graph structure
+        E = len(self.G.edge_var) # Total number of edges
+        self.W_edge = np.ones(E, dtype=float) if W_edge is None else np.asarray(W_edge, dtype=float)  # scales var->check messages
+        self.W_out  = np.ones(E, dtype=float) if W_out  is None else np.asarray(W_out,  dtype=float)  # scales final check->var readout
+        self.gamma = float(gamma)  # relaxation factor (damping)
+
+    # Runs T iterations (default 5) of tied-weight BP to denoise bits
+    def decode(self, hard_bits, iters=5):
+        V = len(self.G.var_nbrs)
+        hard_bits = np.asarray(hard_bits, dtype=np.uint8)
+        hard_bits &= 1
+        # mild LLR priors from hard bits: +α for 1, −α for 0
+        alpha = 2.0
+        l_v = np.where(hard_bits == 1, alpha, -alpha).astype(float)
+
+        E = len(self.G.edge_var)
+        m_vc = np.zeros(E, dtype=float)  # var->check messages
+        m_cv = np.zeros(E, dtype=float)  # check->var messages
+
+        for _ in range(iters):
+            # Variable -> Check
+            new_m_vc = np.zeros_like(m_vc)
+            for v, nbrs in enumerate(self.G.var_nbrs):
+                if not nbrs: continue
+                total = l_v[v] + sum(m_cv[e] for e in nbrs)
+                for e in nbrs:
+                    new_m_vc[e] = self.W_edge[e] * (total - m_cv[e])
+            m_vc = self.gamma * new_m_vc + (1.0 - self.gamma) * m_vc
+
+            # Check -> Variable (tanh / atanh rule, with clipping)
+            new_m_cv = np.zeros_like(m_cv)
+            for c, nbrs in enumerate(self.G.chk_nbrs):
+                if not nbrs: continue
+                vals = np.tanh(0.5 * np.array([m_vc[e] for e in nbrs], dtype=float))
+                vals = np.clip(vals, -0.999999, 0.999999)
+                prod_all = float(np.prod(vals)) if vals.size else 0.0
+                for i_e, e in enumerate(nbrs):
+                    denom = vals[i_e] if vals.size else 1.0
+                    val = np.clip(prod_all / denom, -0.999999, 0.999999)
+                    new_m_cv[e] = 2.0 * np.arctanh(val)
+            m_cv = self.gamma * new_m_cv + (1.0 - self.gamma) * m_cv
+
+        # Final LLRs: prior + weighted incoming check messages
+        llr = l_v.copy()
+        for v, nbrs in enumerate(self.G.var_nbrs):
+            if nbrs:
+                llr[v] += sum(self.W_out[e] * m_cv[e] for e in nbrs)
+        return (llr > 0).astype(np.uint8)  # hard decision
+
+# END of BP-RNN Method
+
+# Decryption
+def rlce_decrypt(y_row, priv):
+    # 1 Undo the global scramble and local mixing
+    S, Gs, A, P, rs_local = (priv[x] for x in ["S", "Gs", "A", "P", "rs"])
+    n, k, r, t_local = (priv[x] for x in ["n", "k", "r", "t"])
+    P_inv = P.T
+    A_inv = _inv_gf(A)
+    y1 = y_row @ P_inv @ A_inv  # undo global column permutation and local block mixing
+
+    # 2 Collapse: take first coordinate from each (r+1)-block to form length-n word
+    y_prime = GF.Zeros((1, n))
+    B = r + 1
+    for i in range(n):
+        block = y1[0, i*B:(i+1)*B]
+        y_prime[0, i] = block[0]
+
+    # Try plain RS decode first (safer), then fall back to BP-RNN if needed
+    def _try_decode_and_check(y_word):
+        mS_try = rs_local.decode(y_word)     # algebraic RS
+        if mS_try.ndim == 1:
+            mS_try = mS_try.reshape(1, -1)
+        S_inv_local = _inv_gf(S)             # inverse of row-scrambler
+        m_try = mS_try @ S_inv_local
+        diff_try = y_row - (m_try @ G_pub)   # CCA-style residual check
+        return m_try if hamming_weight(diff_try) <= t_local else None
+
+    # 2a) Baseline RS-only
+    m_baseline = _try_decode_and_check(y_prime)
+    if m_baseline is not None:
+        return m_baseline
+
+    # 2b) Fallback: BP-RNN clean-up then RS
+    H_bin = _rs_parity_check_binary(rs_local)   # binary parity-check
+    bits_rx = _gf_to_bits(y_prime)              # symbols -> bits
+    bprnn = BPRNN(H_bin, gamma=0.875)           # decoder
+    bits_hat = bprnn.decode(bits_rx, iters=5)   # denoise
+    cw_hat = _bits_to_gf(bits_hat, rs_local.field)  # bits -> symbols
+    y_prime = cw_hat
+
+    # 3) RS-decode and check again
+    m_bprnn = _try_decode_and_check(y_prime)
+    if m_bprnn is None:
+        raise ValueError("Ciphertext invalid (weight check failed)")
+    return m_bprnn
+
+# ============================ TRAINING / EVAL ADD-ONS ============================
+
+H_BIN_GLOBAL = _rs_parity_check_binary(rs)
+
+def _make_sample(priv, G_pub, t):
+    GF_type = priv["rs"].field
+    n, k, r = priv["n"], priv["k"], priv["r"]
+    B = r + 1
+
+    m = GF_type.Random((1, k))
+    y = rlce_encrypt(m, G_pub, t)
+
+    S, Gs, A, P, rs_local = (priv[x] for x in ["S", "Gs", "A", "P", "rs"])
+    P_inv = P.T
+    A_inv = _inv_gf(A)
+    y1 = y @ P_inv @ A_inv
+
+    y_prime = GF_type.Zeros((1, n))
+    for i in range(n):
+        blk = y1[0, i*B:(i+1)*B]
+        y_prime[0, i] = blk[0]
+
+    mS = m @ S
+    target_sym = mS @ Gs
+    return y_prime, target_sym, m, y
+
+def _sym_to_bits(sym_row, GF_type):
+    return _gf_to_bits(sym_row)
+
+def _bit_error_rate(b1, b2):
+    b1 = np.asarray(b1).astype(np.uint8)
+    b2 = np.asarray(b2).astype(np.uint8)
+    assert b1.shape == b2.shape
+    return float(np.count_nonzero(b1 ^ b2)) / b1.size
+
+def _sym_error_rate(s1, s2):
+    assert s1.shape == s2.shape
+    return float(np.count_nonzero(s1 != s2)) / s1.size
+
+class BPRNNTrainer:
+    def __init__(self, H_bin, gamma=0.875, iters=5, rng=None):
+        self.H_bin = (H_bin % 2).astype(np.uint8)
+        self.gamma = float(gamma)
+        self.iters = int(iters)
+        self.rng = np.random.default_rng() if rng is None else rng
+
+        dummy = BPRNN(self.H_bin, gamma=self.gamma)
+        self.E = len(dummy.G.edge_var)
+
+        self.W_edge = np.ones(self.E, dtype=float)
+        self.W_out  = np.ones(self.E, dtype=float)
+
+    def _decode_bits(self, bits_rx):
+        dec = BPRNN(self.H_bin, W_edge=self.W_edge, W_out=self.W_out, gamma=self.gamma)
+        return dec.decode(bits_rx, iters=self.iters)
+
+    def loss_on_batch(self, batch_yprime, batch_target_sym, GF_type):
+        losses = []
+        for y_prime, target_sym in zip(batch_yprime, batch_target_sym):
+            bits_rx = _sym_to_bits(y_prime, GF_type)
+            bits_tg = _sym_to_bits(target_sym, GF_type)
+            bits_hat = self._decode_bits(bits_rx)
+            losses.append(_bit_error_rate(bits_hat, bits_tg))
+        return float(np.mean(losses))
+
+    def spsa_step(self, batch, GF_type, a, c):
+        """
+        batch = (yps, tgts, GF_type). NOTE: GF_type here equals batch[2].
+        """
+        theta = np.concatenate([self.W_edge, self.W_out])  # shape: 2E
+        delta = self.rng.choice([-1.0, 1.0], size=theta.shape)
+
+        theta_plus  = theta + c * delta
+        theta_minus = theta - c * delta
+
+        def _unpack_set(th):
+            self.W_edge = th[:self.E].copy()
+            self.W_out  = th[self.E:].copy()
+
+        _unpack_set(theta_plus)
+        L_plus  = self.loss_on_batch(*batch)
+
+        _unpack_set(theta_minus)
+        L_minus = self.loss_on_batch(*batch)
+
+        ghat = (L_plus - L_minus) / (2.0 * c) * delta
+        theta_new = np.clip(theta - a * ghat, -5.0, 5.0)
+        _unpack_set(theta_new)
+        return float((L_plus + L_minus) / 2.0)
+
+def make_batch(priv, G_pub, t, batch_size=16):
+    GF_type = priv["rs"].field
+    yps, tgts = [], []
+    for _ in range(batch_size):
+        y_prime, target_sym, _, _ = _make_sample(priv, G_pub, t)
+        yps.append(y_prime)
+        tgts.append(target_sym)
+    return yps, tgts, GF_type
+
+def train_bprnn_spsa(trainer, priv, G_pub, t,
+                     steps=200, batch_size=16,
+                     a0=0.1, c0=0.1, alpha=0.602, gamma=0.101):
+    """
+    a_k = a0 / (k+1+10)^alpha
+    c_k = c0 / (k+1)^gamma
+    """
+    log = []
+    for k in range(steps):
+        ak = a0 / ((k + 1 + 10)**alpha)
+        ck = c0 / ((k + 1)**gamma)
+        batch = make_batch(priv, G_pub, t, batch_size=batch_size)
+        loss = trainer.spsa_step(batch, batch[2], a=ak, c=ck)
+        log.append((k+1, ak, ck, loss))
+        if (k+1) % 20 == 0:
+            print(f"[SPSA] step={k+1:4d}  loss≈{loss:.4f}  ak={ak:.4g}  ck={ck:.4g} - RLCE with CNN plus training:439")
+    return log
+
+def evaluate_decoder(trainer, priv, G_pub, t, trials=200):
+    GF_type = priv["rs"].field
+    H_bin = trainer.H_bin
+
+    def rs_only_ok(y_prime, m, y):
+        rs_local = priv["rs"]
+        S = priv["S"]
+        G_pub_local = G_pub
+        mS_try = rs_local.decode(y_prime)
+        if mS_try.ndim == 1:
+            mS_try = mS_try.reshape(1, -1)
+        S_inv = _inv_gf(S)
+        m_try = mS_try @ S_inv
+        diff = y - (m_try @ G_pub_local)
+        return hamming_weight(diff) <= t
+
+    def bprnn_then_rs_ok(y_prime, m, y):
+        rs_local = priv["rs"]
+        S = priv["S"]
+        G_pub_local = G_pub
+        bits_rx = _gf_to_bits(y_prime)
+        bits_hat = BPRNN(H_bin, W_edge=trainer.W_edge, W_out=trainer.W_out,
+                         gamma=trainer.gamma).decode(bits_rx, iters=trainer.iters)
+        cw_hat = _bits_to_gf(bits_hat, rs_local.field)
+        mS_try = rs_local.decode(cw_hat)
+        if mS_try.ndim == 1:
+            mS_try = mS_try.reshape(1, -1)
+        S_inv = _inv_gf(S)
+        m_try = mS_try @ S_inv
+        diff = y - (m_try @ G_pub_local)
+        return hamming_weight(diff) <= t
+
+    rs_ok = 0
+    bprnn_ok = 0
+    ber_before = []
+    ber_after  = []
+    ser_before = []
+    ser_after  = []
+
+    for _ in range(trials):
+        y_prime, target_sym, m, y = _make_sample(priv, G_pub, t)
+        bits_rx  = _gf_to_bits(y_prime)
+        bits_tgt = _gf_to_bits(target_sym)
+        ber_before.append(_bit_error_rate(bits_rx, bits_tgt))
+        ser_before.append(_sym_error_rate(y_prime, target_sym))
+
+        if rs_only_ok(y_prime, m, y): rs_ok += 1
+
+        bits_hat = BPRNN(trainer.H_bin, W_edge=trainer.W_edge, W_out=trainer.W_out,
+                         gamma=trainer.gamma).decode(bits_rx, iters=trainer.iters)
+        cw_hat = _bits_to_gf(bits_hat, priv["rs"].field)
+        ber_after.append(_bit_error_rate(bits_hat, bits_tgt))
+        ser_after.append(_sym_error_rate(cw_hat, target_sym))
+
+        if bprnn_then_rs_ok(y_prime, m, y): bprnn_ok += 1
+
+    res = {
+        "trials": trials,
+        "RS_only_success_rate": rs_ok / trials,
+        "BP_RNN_then_RS_success_rate": bprnn_ok / trials,
+        "BER_before_mean": float(np.mean(ber_before)),
+        "BER_after_mean":  float(np.mean(ber_after)),
+        "SER_before_mean": float(np.mean(ser_before)),
+        "SER_after_mean":  float(np.mean(ser_after)),
+    }
+    return res
+
+# ---------- Fix-weight encryption for experiments ----------
+def rlce_encrypt_weight(m_row, G_pub, w, GF_type, rng=np.random.default_rng()):
+    """
+    Encrypt with *exactly* w nonzero errors (over GF(2^m)).
+    """
+    assert m_row.shape == (1, G_pub.shape[0])
+    qN = G_pub.shape[1]
+    y = m_row @ G_pub
+    pos = rng.choice(qN, size=w, replace=False)
+    e = GF_type.Zeros((1, qN))
+    vals = GF_type.Random(w)
+    for j in range(w):
+        if vals[j] == 0:
+            vals[j] = GF_type(1)
+    e[0, pos] = vals
+    return y + e
+
+# ---------- Decoders split into RS-only vs BP-RNN→RS for fixed-w experiments ----------
+def _project_to_rs_word(y_row, priv):
+    GF_type = priv["rs"].field
+    n, r = priv["n"], priv["r"]
+    B = r + 1
+    S, Gs, A, P, rs_local = (priv[x] for x in ["S", "Gs", "A", "P", "rs"])
+    P_inv = P.T
+    A_inv = _inv_gf(A)
+    y1 = y_row @ P_inv @ A_inv
+    y_prime = GF_type.Zeros((1, n))
+    for i in range(n):
+        blk = y1[0, i*B:(i+1)*B]
+        y_prime[0, i] = blk[0]
+    return y_prime
+
+def decode_rs_only(y_row, priv, G_pub):
+    rs_local = priv["rs"]
+    S = priv["S"]
+    t_local = priv["t"]
+    y_prime = _project_to_rs_word(y_row, priv)
+    mS_try = rs_local.decode(y_prime)
+    if mS_try.ndim == 1:
+        mS_try = mS_try.reshape(1, -1)
+    S_inv = _inv_gf(S)
+    m_try = mS_try @ S_inv
+    diff = y_row - (m_try @ G_pub)
+    ok = (hamming_weight(diff) <= t_local)
+    return ok, m_try
+
+def decode_bprnn_then_rs(y_row, priv, G_pub, trainer):
+    rs_local = priv["rs"]
+    S = priv["S"]
+    t_local = priv["t"]
+    y_prime = _project_to_rs_word(y_row, priv)
+    bits_rx = _gf_to_bits(y_prime)
+    bits_hat = BPRNN(trainer.H_bin, W_edge=trainer.W_edge, W_out=trainer.W_out,
+                     gamma=trainer.gamma).decode(bits_rx, iters=trainer.iters)
+    y_prime_clean = _bits_to_gf(bits_hat, rs_local.field)
+    mS_try = rs_local.decode(y_prime_clean)
+    if mS_try.ndim == 1:
+        mS_try = mS_try.reshape(1, -1)
+    S_inv = _inv_gf(S)
+    m_try = mS_try @ S_inv
+    diff = y_row - (m_try @ G_pub)
+    ok = (hamming_weight(diff) <= t_local)
+    return ok, m_try
+
+def make_batch_fixed_w(priv, G_pub, w, batch_size=64, rng=np.random.default_rng()):
+    GF_type = priv["rs"].field
+    k = priv["k"]
+    ys, ms = [], []
+    for _ in range(batch_size):
+        m = GF_type.Random((1, k))
+        y = rlce_encrypt_weight(m, G_pub, w, GF_type, rng=rng)
+        ys.append(y); ms.append(m)
+    return ys, ms
+
+def train_then_compare(trainer, priv, G_pub, t,
+                       train_steps=200, train_batch=16,
+                       a0=0.1, c0=0.1, alpha=0.602, gamma=0.101):
+    print("\n[TRAIN] Starting SPSA training for BPRNN… - RLCE with CNN plus training:586")
+    _ = train_bprnn_spsa(trainer, priv, G_pub, t,
+                         steps=train_steps, batch_size=train_batch,
+                         a0=a0, c0=c0, alpha=alpha, gamma=gamma)
+    print("[TRAIN] Done. - RLCE with CNN plus training:590")
+
+def accuracy_curve(priv, G_pub, t, trainer=None,
+                   w_min_offset=-4, w_max_offset=+6,
+                   trials_per_w=200, seed=12345):
+    rng_local = np.random.default_rng(seed)
+    results = []
+    print("\n=== Accuracy vs error weight (w = t + x) === - RLCE with CNN plus training:597")
+    print("w | RSonly  | BPRNN→RS - RLCE with CNN plus training:598")
+    print("++ - RLCE with CNN plus training:599")
+    for x in range(w_min_offset, w_max_offset+1):
+        w = max(0, t + x)
+        ys, ms = make_batch_fixed_w(priv, G_pub, w, batch_size=trials_per_w, rng=rng_local)
+        rs_ok = 0
+        bprnn_ok = 0
+        for y, m in zip(ys, ms):
+            ok_rs, _ = decode_rs_only(y, priv, G_pub)
+            if ok_rs: rs_ok += 1
+            if trainer is not None:
+                ok_bp, _ = decode_bprnn_then_rs(y, priv, G_pub, trainer)
+                if ok_bp: bprnn_ok += 1
+        rs_rate = rs_ok / trials_per_w
+        bp_rate = (bprnn_ok / trials_per_w) if trainer is not None else float('nan')
+        print(f"{w:4d} | {rs_rate:8.3%} | {bp_rate:9.3%} - RLCE with CNN plus training:613")
+        results.append({"w": w, "x": x, "rs_rate": rs_rate, "bprnn_rate": bp_rate})
+
+    def max_x_at(p, key):
+        ok = [r for r in results if (not np.isnan(r[key])) and r[key] >= p]
+        return max([r["x"] for r in ok], default=None)
+
+    summary = {
+        "table": results,
+        "rs_max_x_at_95": max_x_at(0.95, "rs_rate"),
+        "bprnn_max_x_at_95": max_x_at(0.95, "bprnn_rate"),
+    }
+    if summary["bprnn_max_x_at_95"] is not None:
+        print(f"\n[Summary] BPRNN can correct reliably (≥95%) up to x = {summary['bprnn_max_x_at_95']} over t. - RLCE with CNN plus training:626")
+    else:
+        print("\n[Summary] BPRNN did not reach 95% at the tested weights; broaden the sweep or train longer. - RLCE with CNN plus training:628")
+    return summary
+
+# ============================ DEMO / MAIN ============================
+if __name__ == "__main__":
+    # Roundtrip sanity check
+    m = GF.Random((1, k))
+    y = rlce_encrypt(m, G_pub, t)
+    m_rec = rlce_decrypt(y, priv)
+    print("Roundtrip OK: - RLCE with CNN plus training:637", np.array_equal(m, m_rec))
+    print(f"Params: RS[n={n},k={k},t={t}], r={r}, public length={qN} - RLCE with CNN plus training:638")
+
+    # Trainer + (optional) training
+    trainer = BPRNNTrainer(H_BIN_GLOBAL, gamma=0.875, iters=5, rng=rng)
+    # Quick training to start; increase steps/batch for stronger results
+    train_then_compare(trainer, priv, G_pub, t,
+                       train_steps=120, train_batch=16,
+                       a0=0.1, c0=0.1)
+
+    # Evaluate before/after BPRNN on natural errors (for info)
+    print("\n=== Evaluating before/after BPRNN (natural t errors) === - RLCE with CNN plus training:648")
+    metrics = evaluate_decoder(trainer, priv, G_pub, t, trials=200)
+    for k_, v_ in metrics.items():
+        print(f"{k_}: {v_} - RLCE with CNN plus training:651")
+
+    # Accuracy vs error weight w = t + x
+    summary = accuracy_curve(priv, G_pub, t, trainer=trainer,
+                             w_min_offset=-4,  # try below t
+                             w_max_offset=+8,  # and beyond t
+                             trials_per_w=200,
+                             seed=2025)
+
+    print("\nMax reliable x (≥95% success): - RLCE with CNN plus training:660")
+    print("RSonly: - RLCE with CNN plus training:661", summary["rs_max_x_at_95"])
+    print("BPRNN→RS: - RLCE with CNN plus training:662", summary["bprnn_max_x_at_95"])

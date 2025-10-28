@@ -11,13 +11,11 @@ from rlce_rs import rlce_rs
 # --- 1. Configuration ---
 RLCE_KEY_NAME = 'keys/rlce_key_03.npz'
 rlce_key = rlce_rs.load(RLCE_KEY_NAME)
-KEY_ID = rlce_key.KEY_ID
-MODEL_ID = 2 # Match the model version you want to test
 
 # This should point to the model saved by your training script's ModelCheckpoint
-TRAINED_MODEL_FILENAME = f'models/trained/EMERGENCY_rgnn_3.05_best'
+TRAINED_MODEL_FILENAME = f'models/trained/rgnn_4.07'
 ERRORS_TO_FIND = 1
-ERRORS_TO_INJECT = 2
+ERRORS_TO_INJECT = 1
 
 
 TEST_BATCH_SIZE = 1000

@@ -7,6 +7,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module='tensorflow.pytho
 import numpy as np
 import tensorflow as tf
 import tensorflow_gnn as tfgnn
+import tensorflow_addons as tfa
 from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 
 from rgnn import rgnn
@@ -16,8 +17,8 @@ from rlce_rs import rlce_rs
 # CONFIGURATION
 # ============================================================================
 RLCE_KEY_NAME = 'keys/rlce_key_03.npz'
-KEY_ID = 4
-MODEL_ID = 1
+KEY_ID = 3
+MODEL_ID = 7
 
 # Model architecture
 NUM_ITERATIONS = 24
@@ -26,20 +27,20 @@ DROPOUT_RATE = 0.4
 
 # Training configuration
 NUM_ERRORS_TOTAL = [1]  # List of error counts (e.g., [1] for 1-from-1, [3,4] for mixed)
-NUM_ERRORS_TO_LABEL = 'all'  # How many to label (use 'all' to label all errors)
+NUM_ERRORS_TO_LABEL = 1  # How many to label (use 'all' to label all errors)
 BATCH_SIZE = 32
-EPOCHS = 500
+EPOCHS = 200
 STEPS_PER_EPOCH = 500
 VALIDATION_STEPS = 100
-LEARNING_RATE = 1e-3
-SAMPLE_WEIGHT_ON_ERRORS = 15.0
+LEARNING_RATE = 1e-5
+SAMPLE_WEIGHT_ON_ERRORS = 10000.0
 
 # Optional: Load pretrained model instead of creating new
-LOAD_PRETRAINED = False
-PRETRAINED_MODEL_PATH = 'models/trained/rgnn_model_3.3.01'
+LOAD_PRETRAINED = True
+PRETRAINED_MODEL_PATH = 'models/trained/rgnn_3.06'
 
 # Save paths
-MODEL_SAVE_PATH = f'models/trained/1F1_rgnn_model_{KEY_ID}.{MODEL_ID:02d}'
+MODEL_SAVE_PATH = f'models/trained/rgnn_{KEY_ID}.{MODEL_ID:02d}'
 
 # ============================================================================
 # SETUP
@@ -129,7 +130,10 @@ class WeightedRGNN(tf.keras.Model):
         with tf.GradientTape() as tape:
             y_pred = self(x, training=True)
             bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
-            loss = tf.reduce_mean(bce * sample_weights)
+            pos_weight = NUM_VARS / max(NUM_ERRORS_TOTAL)  # ~32 for your case
+            bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+            weighted_bce = bce * sample_weights * (1 + pos_weight * y_true)
+            loss = tf.reduce_mean(weighted_bce)
         
         gradients = tape.gradient(loss, self.trainable_variables)
         self.optimizer.apply_gradients(zip(gradients, self.trainable_variables))
@@ -150,7 +154,10 @@ class WeightedRGNN(tf.keras.Model):
         x, y_true, sample_weights = data
         y_pred = self(x, training=False)
         bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
-        loss = tf.reduce_mean(bce * sample_weights)
+        pos_weight = NUM_VARS / max(NUM_ERRORS_TOTAL)  # ~32 for your case
+        bce = tf.keras.losses.binary_crossentropy(y_true, y_pred)
+        weighted_bce = bce * sample_weights * (1 + pos_weight * y_true)
+        loss = tf.reduce_mean(weighted_bce)
         
         self.loss_tracker.update_state(loss)
         self.accuracy_tracker.update_state(y_true, y_pred)
@@ -175,7 +182,7 @@ print("\n--- Model Setup ---")
 
 if LOAD_PRETRAINED:
     print(f"Loading pretrained model from {PRETRAINED_MODEL_PATH}")
-    base_model = tf.keras.models.load_model(PRETRAINED_MODEL_PATH, custom_objects={'rgnn': rgnn})
+    base_model = tf.keras.models.load_model(PRETRAINED_MODEL_PATH, custom_objects={'rgnn': rgnn, 'SigmoidFocalCrossEntropy': tfa.losses.SigmoidFocalCrossEntropy})
     print("Pretrained model loaded.")
 else:
     print("Creating new model...")
@@ -258,21 +265,28 @@ print("Data pipeline ready.")
 # ============================================================================
 callbacks = [
     ModelCheckpoint(
-        filepath=MODEL_SAVE_PATH + '_checkpoint',
+        filepath=MODEL_SAVE_PATH + '_checkpoint_recall',
         monitor='val_recall',
+        save_best_only=True,
+        mode='max',
+        verbose=1
+    ),
+    ModelCheckpoint(
+        filepath=MODEL_SAVE_PATH + '_checkpoint_precision',
+        monitor='val_precision',
         save_best_only=True,
         mode='max',
         verbose=1
     ),
     EarlyStopping(
         monitor='val_recall',
-        patience=20,
+        patience=40,
         mode='max',
         restore_best_weights=True,
         verbose=1
     ),
     ReduceLROnPlateau(
-        monitor='val_loss',
+        monitor='val_recall',
         factor=0.5,
         patience=8,
         min_lr=1e-7,

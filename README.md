@@ -73,12 +73,16 @@ Qryptik has far-reaching implications for the future of secure computing:
 4. **Foundations for future research:** This work opens pathways for hybrid cryptosystems that combine formal security with adaptive intelligence.
 
 ## 👥 Team
-Developers ⭐:
-- Avery Brown
-- Karthik Sobhirala
-- Maryam Maalin
-- Siri Appalaneni
+Developers* ⭐: 
+- Siri Appalaneni ([tree/siri-appalaneni](https://github.com/ChauhanSai/qryptik/tree/siri-appalaneni))
+- Avery Brown ([tree/avery-brown](https://github.com/ChauhanSai/qryptik/tree/avery-brown))
+- Maryam Maalin ([tree/maryam-maalin](https://github.com/ChauhanSai/qryptik/tree/maryam-maalin))
+- Karthik Sobhirala ([tree/karthik-sobhirala](https://github.com/ChauhanSai/qryptik/tree/karthik-sobhirala))
 
 Faculty Advisor 🧑‍🔬: Dr. Andrew Nemec
 
 Project Manager 🤺: Sai Chauhan
+
+**Code contributions were managed through individual branches for each developer*
+
+*Qryptik is published by ACM Research, a registered student organization. Qryptik is not an official publication of UT Dallas and does not represent the views of the university or its officers. The University of Texas at Dallas is an Equal Opportunity/Affirmative Action University. Students with disabilities needing special assistance to attend please call (972‐883‐2946) [or the number of Fraternity and Sorority Life (972‐883‐6523)]. Texas Relay Operation: 1‐800‐RELAYTX.*
